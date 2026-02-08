@@ -1,0 +1,1 @@
+alias claude='_args=(); [ "$NO_SKIP_PERMISSIONS" != "1" ] && _args+=(--dangerously-skip-permissions); claude "${_args[@]}"'

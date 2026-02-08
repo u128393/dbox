@@ -1,0 +1,51 @@
+#!/bin/bash
+
+set -e
+
+if ! command -v claude &>/dev/null; then
+  echo -e "\n🔧 Claude 未安装，正在使用官方脚本安装...\n"
+  curl -fsSL https://claude.ai/install.sh | bash
+fi
+
+CLAUDE_JSON="$HOME/.claude.json"
+SETTINGS_JSON="$HOME/.claude/settings.json"
+
+if [[ ! -f "$CLAUDE_JSON" ]] || ! jq -e '.hasCompletedOnboarding == true' "$CLAUDE_JSON" &>/dev/null; then
+  echo ""
+  read -p "🔔 Claude 尚未初始化，是否配置环境变量连接三方平台？[y/N] "
+
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo ""
+    read -p $'\033[1;31m*\033[0m ANTHROPIC_BASE_URL: ' ANTHROPIC_BASE_URL
+    read -p $'\033[1;31m*\033[0m ANTHROPIC_AUTH_TOKEN: ' ANTHROPIC_AUTH_TOKEN
+    read -p "  ANTHROPIC_MODEL: " ANTHROPIC_MODEL
+
+    if [[ ! -f "$SETTINGS_JSON" ]]; then
+      echo '{}' > "$SETTINGS_JSON"
+    fi
+
+    # 动态构建 jq 参数和更新表达式（只包含非空的值）
+    jq_args=(
+      --arg base_url "$ANTHROPIC_BASE_URL"
+      --arg auth_token "$ANTHROPIC_AUTH_TOKEN"
+    )
+    jq_updates=(
+      '"ANTHROPIC_BASE_URL": $base_url'
+      '"ANTHROPIC_AUTH_TOKEN": $auth_token'
+    )
+
+    if [[ -n "$ANTHROPIC_MODEL" ]]; then
+      jq_args+=(--arg model "$ANTHROPIC_MODEL")
+      jq_updates+=('"ANTHROPIC_MODEL": $model')
+    fi
+
+    IFS=, jq_update_str="${jq_updates[*]}"
+    jq "${jq_args[@]}" ".env |= (. // {}) * { $jq_update_str }" "$SETTINGS_JSON" | sponge "$SETTINGS_JSON"
+
+    if [[ ! -f "$CLAUDE_JSON" ]]; then
+      echo '{}' > "$CLAUDE_JSON"
+    fi
+
+    jq '. * { "hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true }' "$CLAUDE_JSON" | sponge "$CLAUDE_JSON"
+  fi
+fi

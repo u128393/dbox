@@ -1,0 +1,3 @@
+d:data/.config:/home/devuser/.config
+d:data/.local:/home/devuser/.local
+d:{cwd}:{cwd}
