@@ -1,0 +1,20 @@
+# pre-exec.local 示例 snippets
+
+# 将你需要的工具安装代码复制到相应工具目录的 pre-exec.local 中
+# 每个安装段都遵循：检查命令是否存在 -> 如不存在则安装 的模式
+
+# 安装 Node.js
+if ! command -v node &>/dev/null; then
+  echo -e "\n🔧 安装 Node.js...\n"
+  curl -L 'https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-arm64.tar.xz' | \
+    tar -xJ -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/include/*' '*/lib/*' '*/share/*'
+fi
+
+# 安装 Go
+# 建议：在 mappings.local 中添加映射 `d:data/go:/home/devuser/go`
+if ! command -v go &>/dev/null; then
+  echo -e "\n🔧 安装 Go...\n"
+  curl -L 'https://dl.google.com/go/go1.24.13.linux-arm64.tar.gz' | \
+    tar -xz -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/pkg/*' '*/src/*' '*/go.env'
+  export PATH="$HOME/.local/go/bin:$PATH"
+fi

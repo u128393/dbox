@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# d命令自动补全脚本
+# 支持 bash 和 zsh
+
+# ============================================================
+# 共享函数
+# ============================================================
+
+# 获取 dbox 根目录（支持符号链接）
+_d_get_root() {
+  local script_path="$1"
+  if [[ -L "$script_path" ]]; then
+    while [[ -L "$script_path" ]]; do
+      local script_dir
+      script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+      script_path="$(readlink "$script_path")"
+      [[ $script_path != /* ]] && script_path="$script_dir/$script_path"
+    done
+  fi
+  cd "$(dirname "$script_path")" && pwd
+}
+
+# 获取所有工具和 profile 列表
+_d_get_tools() {
+  local dbox_root="$1"
+  local tool_dir profile_dir tool_name profile_name
+
+  for tool_dir in "$dbox_root"/*/; do
+    [[ ! -d "$tool_dir" ]] && continue
+
+    tool_name="$(basename "$tool_dir")"
+    [[ ! -f "$tool_dir/tool.sh" ]] && continue
+
+    # 输出工具本身
+    echo "$tool_name"
+
+    # 输出该工具的所有 profile 组合（跳过 default 和 template）
+    for profile_dir in "$tool_dir/profiles"/*/; do
+      [[ ! -d "$profile_dir" ]] && continue
+      profile_name="$(basename "$profile_dir")"
+      [[ "$profile_name" == "default" || "$profile_name" == "template" ]] && continue
+      echo "${tool_name}-${profile_name}"
+    done
+  done
+}
+
+# ============================================================
+# Bash 补全
+# ============================================================
+if [[ -n "$BASH_VERSION" ]]; then
+  _d_complete() {
+    local cur prev words cword
+    # 手动初始化补全变量（兼容性更好）
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    words=("${COMP_WORDS[@]}")
+    cword=$COMP_CWORD
+
+    # 获取 dbox 根目录
+    local dbox_root
+    dbox_root="$(_d_get_root "${BASH_SOURCE[0]}")"
+
+    # 第一个参数：完成工具名和 profile 组合
+    if [[ $cword -eq 1 ]]; then
+      local tools
+      tools="$(_d_get_tools "$dbox_root")"
+      COMPREPLY=($(compgen -W "$tools" -- "$cur"))
+    fi
+  }
+
+  complete -F _d_complete d 2>/dev/null
+
+# ============================================================
+# Zsh 补全
+# ============================================================
+elif [[ -n "$ZSH_VERSION" ]]; then
+  # 确保补全系统已初始化
+  autoload -Uz compinit 2>/dev/null
+  if (( $+functions[compinit] )); then
+    compinit -C 2>/dev/null
+  fi
+
+  _d() {
+    local -a tools
+    local dbox_root
+
+    # 获取 dbox 根目录
+    dbox_root="$(_d_get_root "${(%):-%x}")"
+
+    # 收集所有工具和 profile
+    tools=(${(f)"$(_d_get_tools "$dbox_root")"})
+
+    # 描述格式
+    _describe 'tool or tool-profile' tools
+  }
+
+  # 注册补全函数
+  if (( $+functions[compdef] )); then
+    compdef _d d
+  fi
+fi
+

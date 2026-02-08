@@ -1,0 +1,7 @@
+# 忽略所有 data 目录（持久化数据）
+*/data/
+# 忽略所有 profiles/ 子目录，但保留 template
+*/profiles/*
+!*/profiles/template
+# 忽略所有本地覆盖文件
+*.local
