@@ -1,15 +1,16 @@
 #!/bin/bash
 
 # dbox 运行脚本
-# 用法: d <tool>[-<profile>] [args...]
-#   tool-profile: 工具名和配置名，用 - 连接（如 claude-zai）
-#                 配置可选，默认为 default
-#   args: 传递给工具的参数
+# 根据调用名称决定行为：
+#   d  - 运行工具脚本 (tool.sh)
+#   ds - 启动 bash shell
+#   dt - 以 tmux 模式运行工具脚本
 
 set -e
 
 # 配置变量
 IMAGE_NAME="dbox"
+
 # 解析符号链接，获取真实脚本目录
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_SOURCE" ]; do
@@ -19,6 +20,34 @@ while [ -L "$SCRIPT_SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 WORKSPACE_DIR="$(pwd)"
+
+# 根据调用名称决定模式
+CALLER_NAME="$(basename "$0")"
+case "$CALLER_NAME" in
+  d)
+    MODE="run"
+    ;;
+  ds)
+    MODE="shell"
+    ;;
+  dt)
+    MODE="tmux"
+    ;;
+  dbox.sh)
+    # 直接调用时，第一个参数是模式
+    if [ $# -gt 0 ]; then
+      MODE="$1"
+      shift
+    else
+      echo "用法: dbox.sh <run|shell|tmux> <tool>[-<profile>] [args...]" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "错误: 未知的调用方式: $CALLER_NAME" >&2
+    exit 1
+    ;;
+esac
 
 # 默认值
 TOOL=""
@@ -41,10 +70,20 @@ fi
 # 检查工具目录是否存在
 if [ -z "$TOOL" ]; then
   echo "错误: 必须指定工具" >&2
-  echo "用法: d <tool>[-<profile>] [args...]" >&2
-  echo "示例: d claude" >&2
-  echo "      d claude-zai" >&2
-  echo "      d claude --version" >&2
+  # 根据调用方式显示用法
+  if [ "$CALLER_NAME" = "dbox.sh" ]; then
+    echo "用法: dbox.sh <run|shell|tmux> <tool>[-<profile>] [args...]" >&2
+    echo "示例: dbox.sh run claude" >&2
+    echo "      dbox.sh shell claude" >&2
+    echo "      dbox.sh tmux claude-zai" >&2
+  else
+    echo "用法: $CALLER_NAME <tool>[-<profile>] [args...]" >&2
+    echo "示例: $CALLER_NAME claude" >&2
+    echo "      $CALLER_NAME claude-zai" >&2
+    if [ "$MODE" = "run" ]; then
+      echo "      $CALLER_NAME claude --version" >&2
+    fi
+  fi
   exit 1
 fi
 
@@ -80,10 +119,11 @@ if [ ! -d "$PROFILE_DIR" ]; then
     read -r CREATE_PROFILE
     # 默认为 Yes
     CREATE_PROFILE="${CREATE_PROFILE:-y}"
+    echo ""
   fi
 
   if [[ "$CREATE_PROFILE" =~ ^[Yy]$ ]]; then
-    echo -e "\n📁 创建配置目录: $PROFILE_DIR"
+    echo -e "📁 创建配置目录: $PROFILE_DIR"
     cp -R "$TEMPLATE_DIR" "$PROFILE_DIR"
   else
     echo "错误: 配置目录不存在: $PROFILE_DIR" >&2
@@ -118,14 +158,14 @@ VOLUME_MOUNTS=()
 # 映射 exec.sh
 VOLUME_MOUNTS+=("-v" "$SCRIPT_DIR/exec.sh:/sandbox/exec.sh:ro")
 
-# 检查工具调用脚本是否存在
-if [ ! -f "$TOOL_DIR/tool.sh" ]; then
-  echo "错误: 工具调用脚本不存在: $TOOL_DIR/tool.sh" >&2
-  exit 1
+# 映射 tool.sh
+if [ "$MODE" = "run" ] || [ "$MODE" = "tmux" ]; then
+  if [ ! -f "$TOOL_DIR/tool.sh" ]; then
+    echo "错误: 工具调用脚本不存在: $TOOL_DIR/tool.sh" >&2
+    exit 1
+  fi
+  VOLUME_MOUNTS+=("-v" "$TOOL_DIR/tool.sh:/sandbox/tool.sh:ro")
 fi
-
-# 映射工具调用脚本
-VOLUME_MOUNTS+=("-v" "$TOOL_DIR/tool.sh:/sandbox/tool.sh:ro")
 
 # 工作目录参数
 WORKDIR_ARG=()
@@ -252,6 +292,29 @@ if [ -f "$HOME/.gitconfig" ]; then
   VOLUME_MOUNTS+=("-v" "$HOME/.gitconfig:/home/devuser/.gitconfig:ro")
 fi
 
+# 根据模式决定运行什么命令
+CONTAINER_CMD=()
+case "$MODE" in
+  run)
+    CONTAINER_CMD=("/sandbox/tool.sh" "$@")
+    ;;
+  shell)
+    CONTAINER_CMD=("/bin/bash" "$@")
+    ;;
+  tmux)
+    tool_cmd_str="/sandbox/tool.sh"
+    for arg in "$@"; do
+      # 使用 printf %q 来安全地转义参数
+      tool_cmd_str="$tool_cmd_str $(printf '%q' "$arg")"
+    done
+    CONTAINER_CMD=("tmux" "-CCu" "new" "$tool_cmd_str")
+    ;;
+  *)
+    echo "错误: 未知的模式: $MODE" >&2
+    exit 1
+    ;;
+esac
+
 echo "🚀 启动沙箱容器..."
 echo "   工具: $TOOL"
 echo "   配置: $PROFILE"
@@ -272,4 +335,4 @@ docker run $TTY_FLAG --rm --init \
   "${ENV_VARS[@]}" \
   "${VOLUME_MOUNTS[@]}" \
   "$IMAGE_NAME" \
-  /sandbox/tool.sh "$@"
+  "${CONTAINER_CMD[@]}"

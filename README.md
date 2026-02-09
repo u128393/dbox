@@ -8,8 +8,8 @@
 dbox/
 ├── exec.sh             # 容器内执行脚本
 ├── Dockerfile          # 统一的 base 镜像
-├── run.sh              # 统一的运行脚本
-├── install.sh          # 安装脚本（创建 `d` 命令）
+├── dbox.sh             # 统一运行脚本
+├── install.sh          # 安装脚本（创建 d、ds、dt 命令）
 ├── mappings            # 全局目录映射配置（可选）
 ├── mappings.local      # 全局目录映射本地覆盖（可选，不提交到 git）
 ├── env                 # 全局环境变量（可选）
@@ -18,6 +18,8 @@ dbox/
 ├── pre-exec.local      # 全局 pre-exec hook 本地覆盖（可选，不提交到 git）
 ├── post-exec           # 全局 post-exec hook（可选）
 ├── post-exec.local     # 全局 post-exec hook 本地覆盖（可选，不提交到 git）
+├── completion          # 自动补全脚本
+├── snippets.txt        # 常用工具安装片段
 ├── README.md           # 本文件
 ├── .gitignore          # Git 忽略规则
 └── <tool>/            # 工具目录（如 claude）
@@ -43,7 +45,7 @@ dbox/
 ## 快速开始
 
 ```bash
-# 1. 安装（创建符号链接 ~/.local/bin/d）
+# 1. 安装（创建符号链接 ~/.local/bin/{d,ds,dt}）
 ./install.sh
 
 # 2. 确保在 PATH 中
@@ -55,21 +57,56 @@ export PATH="$HOME/.local/bin:$PATH"
 source /path/to/dbox/completion
 
 # 4. 使用
-d claude                 # 使用 claude 工具，默认配置
-d claude --version       # 带参数
-d claude-zai             # 使用 claude 工具，zai 配置
-d claude-zai --version   # 带参数
+d claude                 # 运行 claude (默认配置)
+d claude-zai             # 运行 claude (zai 配置)
+d claude --version       # 传递工具参数
+ds claude                # 启动 claude 容器的 bash shell
+dt claude                # 以 tmux 模式运行 claude
 ```
 
 ## 命令格式
 
-```
+### d - 运行工具脚本
+
+```bash
 d <tool>[-<profile>] [args...]
 ```
+
+运行工具的 `tool.sh` 脚本。
 
 - `tool` - 工具名称（必需）
 - `profile` - 配置名称（可选，默认 `default`），用 `-` 与工具名连接
 - `args` - 传递给工具的参数
+
+### ds - 启动 Shell
+
+```bash
+ds <tool>[-<profile>]
+```
+
+直接启动容器的交互式 `/bin/bash`，进入容器 shell 进行调试或手动操作。
+
+- `tool` - 工具名称（必需）
+- `profile` - 配置名称（可选，默认 `default`）
+
+### dt - 以 tmux 模式运行工具脚本
+
+```bash
+dt <tool>[-<profile>]
+```
+
+在容器内以 tmux -CC 模式运行工具脚本。
+
+- `tool` - 工具名称（必需）
+- `profile` - 配置名称（可选，默认 `default`）
+
+### 直接调用 dbox.sh
+
+```bash
+dbox.sh <run|shell|tmux> <tool>[-<profile>] [args...]
+```
+
+直接调用 `dbox.sh` 时，第一个参数指定模式。
 
 ## 自动补全
 
@@ -86,8 +123,12 @@ source /path/to/dbox/completion
 **使用效果：**
 
 ```bash
-d <Tab>           # 列出所有工具（如 claude）
-d claude-<Tab>    # 列出 claude 工具的所有 profile
+d <Tab>            # 列出所有工具（如 claude）
+ds <Tab>           # 列出所有工具
+dt <Tab>           # 列出所有工具
+d claude-<Tab>     # 列出 claude 工具的所有 profile
+ds claude-<Tab>    # 列出 claude 工具的所有 profile
+dt claude-<Tab>    # 列出 claude 工具的所有 profile
 ```
 
 ## Profile 自动创建
