@@ -71,11 +71,13 @@ Template 目录 `profiles/template/.claude/settings.json` 已预设以下配置�
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": 1
-  }
+  },
+  "skipDangerousModePermissionPrompt": true
 }
 ```
 
-此环境变量启用了 Claude Code 的实验性 Agent Teams 功能。
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`: 启用 Claude Code 的实验性 Agent Teams 功能
+- `skipDangerousModePermissionPrompt`: 跳过 --dangerously-skip-permissions 弹窗提示
 
 ## 目录结构
 

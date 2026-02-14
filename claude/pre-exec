@@ -3,7 +3,7 @@
 set -e
 
 if ! command -v claude &>/dev/null; then
-  echo -e "\n🔧 Claude 未安装，正在使用官方脚本安装...\n"
+  echo -e "🔧 Claude 未安装，正在使用官方脚本安装...\n"
   curl -fsSL https://claude.ai/install.sh | bash
 fi
 
@@ -11,7 +11,6 @@ CLAUDE_JSON="$HOME/.claude.json"
 SETTINGS_JSON="$HOME/.claude/settings.json"
 
 if [[ ! -f "$CLAUDE_JSON" ]] || ! jq -e '.hasCompletedOnboarding == true' "$CLAUDE_JSON" &>/dev/null; then
-  echo ""
   read -p "🔔 Claude 尚未初始化，是否配置环境变量连接三方平台？[y/N] "
 
   if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -39,13 +38,15 @@ if [[ ! -f "$CLAUDE_JSON" ]] || ! jq -e '.hasCompletedOnboarding == true' "$CLAU
       jq_updates+=('"ANTHROPIC_MODEL": $model')
     fi
 
+    jq_updates+=('"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1')
+
     IFS=, jq_update_str="${jq_updates[*]}"
-    jq "${jq_args[@]}" ".env |= (. // {}) * { $jq_update_str }" "$SETTINGS_JSON" | sponge "$SETTINGS_JSON"
+    jq -S "${jq_args[@]}" ".env |= (. // {}) * { $jq_update_str }" "$SETTINGS_JSON" | sponge "$SETTINGS_JSON"
 
     if [[ ! -f "$CLAUDE_JSON" ]]; then
       echo '{}' > "$CLAUDE_JSON"
     fi
 
-    jq '. * { "hasCompletedOnboarding": true, "bypassPermissionsModeAccepted": true }' "$CLAUDE_JSON" | sponge "$CLAUDE_JSON"
+    jq -S '.hasCompletedOnboarding = true' "$CLAUDE_JSON" | sponge "$CLAUDE_JSON"
   fi
 fi
