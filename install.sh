@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # dbox 安装脚本
-# 在 ~/.local/bin/ 创建 d、ds、dt 命令链接
 
 set -e
 
@@ -71,10 +70,8 @@ install_command() {
   fi
 }
 
-# 安装所有命令
+# 安装 d 命令
 install_command "d"
-install_command "ds"
-install_command "dt"
 
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -82,16 +79,20 @@ echo "安装完成！"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 echo "可用命令:"
-echo "   d  <tool>[-<profile>] [args...]  # 运行工具（如 claude）"
-echo "   ds <tool>[-<profile>] [args...]  # 启动 bash shell"
-echo "   dt <tool>[-<profile>]            # 以 tmux 模式运行工具"
+echo "   d [flags] <tool>[-<profile>] [args...]  # 运行工具"
+echo
+echo "常用标志:"
+echo "   -s, --shell    启动容器 shell"
+echo "   -u, --up       启动服务（后台运行）"
+echo "   -d, --down     停止服务"
+echo "   -l, --list     列出所有容器"
+echo "   -h, --help     显示帮助"
 echo
 echo "示例:"
 echo "   d claude           # 运行 claude (默认配置)"
 echo "   d claude-zai       # 运行 claude (zai 配置)"
 echo "   d claude --version # 传递工具参数"
-echo "   ds claude          # 启动 claude 容器的 bash shell"
-echo "   dt claude          # 以 tmux 模式运行 claude"
+echo "   d -s claude        # 启动 claude 容器 shell"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "自动补全设置"

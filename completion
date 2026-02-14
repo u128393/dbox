@@ -2,14 +2,14 @@
 
 # dbox 自动补全脚本
 # 支持 bash 和 zsh
-# 为 d、ds、dt 命令提供工具名和 profile 补全
+# 为 d 命令提供工具名和 profile 补全
 
 # ============================================================
 # 共享函数
 # ============================================================
 
 # 获取 dbox 根目录（支持符号链接）
-_d_get_root() {
+_dbox_get_root() {
   local script_path="$1"
   if [[ -L "$script_path" ]]; then
     while [[ -L "$script_path" ]]; do
@@ -22,9 +22,12 @@ _d_get_root() {
   cd "$(dirname "$script_path")" && pwd
 }
 
-# 获取所有工具和 profile 列表
-_d_get_tools() {
+# 获取所有工具和 profile 组合（公共方法）
+# 参数：$1 = dbox_root, $2 = "--service-only" 则只返回服务型工具
+# 输出格式：每行一个 "tool" 或 "tool-profile"
+_dbox_get_tools_with_profiles() {
   local dbox_root="$1"
+  local service_only="${2:-}"
   local tool_dir profile_dir tool_name profile_name
 
   for tool_dir in "$dbox_root"/*/; do
@@ -33,14 +36,17 @@ _d_get_tools() {
     tool_name="$(basename "$tool_dir")"
     [[ ! -f "$tool_dir/tool.sh" ]] && continue
 
+    # 如果只要求服务型工具，检查 service.sh 是否存在
+    [[ "$service_only" == "--service-only" && ! -f "$tool_dir/service.sh" ]] && continue
+
     # 输出工具本身
     echo "$tool_name"
 
-    # 输出该工具的所有 profile 组合（跳过 default 和 template）
+    # 输出该工具的所有 profile 组合（跳过 template 和 default）
     for profile_dir in "$tool_dir/profiles"/*/; do
       [[ ! -d "$profile_dir" ]] && continue
       profile_name="$(basename "$profile_dir")"
-      [[ "$profile_name" == "default" || "$profile_name" == "template" ]] && continue
+      [[ "$profile_name" == "template" || "$profile_name" == "default" ]] && continue
       echo "${tool_name}-${profile_name}"
     done
   done
@@ -50,60 +56,145 @@ _d_get_tools() {
 # Bash 补全
 # ============================================================
 if [[ -n "$BASH_VERSION" ]]; then
-  _d_complete() {
+  _d() {
     local cur prev words cword
-    # 手动初始化补全变量（兼容性更好）
-    cur="${COMP_WORDS[COMP_CWORD]}"
-    prev="${COMP_WORDS[COMP_CWORD-1]}"
-    words=("${COMP_WORDS[@]}")
-    cword=$COMP_CWORD
+
+    # 兼容没有 bash-completion 的环境
+    if declare -F _init_completion >/dev/null 2>&1; then
+      _init_completion || return
+    else
+      COMPREPLY=()
+      _get_comp_words_by_ref cur prev words cword 2>/dev/null || {
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+      }
+    fi
 
     # 获取 dbox 根目录
     local dbox_root
-    dbox_root="$(_d_get_root "${BASH_SOURCE[0]}")"
+    dbox_root="$(_dbox_get_root "${BASH_SOURCE[0]}")"
 
-    # 第一个参数：完成工具名和 profile 组合
-    if [[ $cword -eq 1 ]]; then
-      local tools
-      tools="$(_d_get_tools "$dbox_root")"
-      COMPREPLY=($(compgen -W "$tools" -- "$cur"))
-    fi
+    case ${COMP_CWORD} in
+      1)
+        # 第一个参数：根据输入前缀决定补全内容
+        local tools
+        tools="$(_dbox_get_tools_with_profiles "$dbox_root")"
+        if [[ "$cur" == -* ]]; then
+          # 输入以 - 开头，补全标志
+          local flags="-u --up -d --down -r --restart -l --list -s --shell -h --help -v --version"
+          COMPREPLY=($(compgen -W "$flags" -- "$cur"))
+        else
+          # 否则只补全工具名
+          COMPREPLY=($(compgen -W "$tools" -- "$cur"))
+        fi
+        ;;
+      2)
+        # 第二个参数：只有前一个是标志时才补全工具名
+        case "$prev" in
+          -u|--up|-d|--down|-r|--restart)
+            # 服务型标志：只列出服务型工具
+            local tools
+            tools="$(_dbox_get_tools_with_profiles "$dbox_root" "--service-only")"
+            COMPREPLY=($(compgen -W "$tools" -- "$cur"))
+            ;;
+          -s|--shell)
+            # shell 标志：列出所有工具
+            local tools
+            tools="$(_dbox_get_tools_with_profiles "$dbox_root")"
+            COMPREPLY=($(compgen -W "$tools" -- "$cur"))
+            ;;
+          *)
+            # prev 不是标志，说明第一个参数是工具名，后续参数传给容器，不做补全
+            ;;
+        esac
+        ;;
+      *)
+        # 第三个及之后的参数：传给容器内的工具，不做补全
+        ;;
+    esac
   }
 
-  # 为所有 dbox 命令注册补全
-  complete -F _d_complete d 2>/dev/null
-  complete -F _d_complete ds 2>/dev/null
-  complete -F _d_complete dt 2>/dev/null
+  complete -F _d d
 
 # ============================================================
 # Zsh 补全
 # ============================================================
 elif [[ -n "$ZSH_VERSION" ]]; then
-  # 确保补全系统已初始化
-  autoload -Uz compinit 2>/dev/null
-  if (( $+functions[compinit] )); then
-    compinit -C 2>/dev/null
+  # 确保 compinit 已加载
+  if (( ! $+functions[compinit] )); then
+    autoload -Uz compinit && compinit -C
   fi
 
   _d() {
-    local -a tools
+    local context state line
+    typeset -A opt_args
+
     local dbox_root
+    dbox_root="$(_dbox_get_root "${(%):-%x}")"
 
-    # 获取 dbox 根目录
-    dbox_root="$(_d_get_root "${(%):-%x}")"
+    # 检查是否已经输入了工具名
+    # words[1] 是命令名 'd'，words[2] 是第一个参数
+    # 如果 words[2] 存在且不是标志，或者 words[3] 存在（标志+工具名的情况），则不再补全工具名
+    local has_tool=0
+    local i
+    for (( i = 2; i <= ${#words}; i++ )); do
+      if [[ ${words[$i]} != -* ]]; then
+        has_tool=1
+        break
+      fi
+    done
 
-    # 收集所有工具和 profile
-    tools=(${(f)"$(_d_get_tools "$dbox_root")"})
+    if [[ $has_tool -eq 1 && $CURRENT -gt $i ]]; then
+      # 已经有工具名，且当前光标在工具名之后的参数位置
+      # 不提供补全
+      return
+    fi
 
-    # 描述格式
-    _describe 'tool or tool-profile' tools
+    _arguments -C \
+      '(- *)'{-h,--help}'[显示帮助]' \
+      '(- *)'{-v,--version}'[显示版本]' \
+      '(- *)'{-l,--list}'[列出所有 dbox 容器]' \
+      {-u,--up}'[启动服务]: :->service-tool' \
+      {-d,--down}'[停止服务]: :->service-tool' \
+      {-r,--restart}'[重启服务]: :->service-tool' \
+      {-s,--shell}'[启动容器 shell]: :->all-tool' \
+      '1: :->all-tool'
+
+    case $state in
+      service-tool)
+        _dbox_zsh_get_service_tools_with_profiles
+        ;;
+      all-tool)
+        _dbox_zsh_get_all_tools_with_profiles
+        ;;
+    esac
   }
 
-  # 为所有 dbox 命令注册补全
+  _dbox_zsh_get_all_tools_with_profiles() {
+    local -a result
+    local dbox_root
+
+    dbox_root="$(_dbox_get_root "${(%):-%x}")"
+
+    # 调用公共方法，将输出转为数组
+    result=(${(f)"$(_dbox_get_tools_with_profiles "$dbox_root")"})
+
+    _describe 'tool or tool-profile' result
+  }
+
+  _dbox_zsh_get_service_tools_with_profiles() {
+    local -a result
+    local dbox_root
+
+    dbox_root="$(_dbox_get_root "${(%):-%x}")"
+
+    # 调用公共方法，只获取服务型工具
+    result=(${(f)"$(_dbox_get_tools_with_profiles "$dbox_root" "--service-only")"})
+
+    _describe 'service tool or tool-profile' result
+  }
+
   if (( $+functions[compdef] )); then
     compdef _d d
-    compdef _d ds
-    compdef _d dt
   fi
 fi
-

@@ -6,46 +6,28 @@
 
 ```
 dbox/
-├── exec.sh             # 容器内执行脚本
-├── Dockerfile          # 统一的 base 镜像
-├── dbox.sh             # 统一运行脚本
-├── install.sh          # 安装脚本（创建 d、ds、dt 命令）
-├── mappings            # 全局目录映射配置（可选）
-├── mappings.local      # 全局目录映射本地覆盖（可选，不提交到 git）
-├── env                 # 全局环境变量（可选）
-├── env.local           # 全局环境变量本地覆盖（可选，不提交到 git）
-├── pre-exec            # 全局 pre-exec hook（可选）
-├── pre-exec.local      # 全局 pre-exec hook 本地覆盖（可选，不提交到 git）
-├── post-exec           # 全局 post-exec hook（可选）
-├── post-exec.local     # 全局 post-exec hook 本地覆盖（可选，不提交到 git）
-├── completion          # 自动补全脚本
-├── snippets.txt        # 常用工具安装片段
-├── README.md           # 本文件
-├── .gitignore          # Git 忽略规则
-└── <tool>/            # 工具目录（如 claude）
-    ├── tool.sh         # 工具调用脚本（必需）
-    ├── pre-exec        # 工具级 pre-exec hook（可选）
-    ├── pre-exec.local  # 工具级 pre-exec hook 本地覆盖（可选，不提交到 git）
-    ├── post-exec       # 工具级 post-exec hook（可选）
-    ├── post-exec.local # 工具级 post-exec hook 本地覆盖（可选，不提交到 git）
-    ├── mappings        # 工具级目录映射配置
-    ├── mappings.local  # 工具级目录映射本地覆盖（可选，不提交到 git）
-    ├── env             # 工具级环境变量（可选）
-    ├── env.local       # 工具级环境变量本地覆盖（可选，不提交到 git）
-    ├── data/           # 持久化数据（可选，不提交到 git）
-    └── profiles/       # 环境配置
-        └── template/   # 模板目录（提交到 git）
-            ├── .claude/ # Claude 配置（Claude 特有）
-            ├── mappings # 目录映射配置
-            ├── mappings.local # 目录映射本地覆盖（可选，不提交到 git）
-            ├── pre-exec # profile 级 pre-exec hook（可选）
-            └── post-exec # profile 级 post-exec hook（可选）
+├── dbox.sh               # 统一入口脚本
+├── Dockerfile            # 基础镜像
+├── exec.sh               # 容器入口
+├── completion            # 自动补全
+├── install.sh            # 安装脚本
+│
+├── <tool>/               # 工具目录
+│   ├── tool.sh           # 工具执行脚本（必需）
+│   ├── service.sh        # 服务启动脚本（服务型工具必需）
+│   ├── config            # 工具配置（可选）
+│   ├── profiles/         # 环境配置
+│   └── ...
+│
+├── mappings              # 全局目录映射配置（可选）
+├── env                   # 全局环境变量（可选）
+└── ...
 ```
 
 ## 快速开始
 
 ```bash
-# 1. 安装（创建符号链接 ~/.local/bin/{d,ds,dt}）
+# 1. 安装（创建符号链接 ~/.local/bin/d）
 ./install.sh
 
 # 2. 确保在 PATH 中
@@ -59,58 +41,73 @@ source /path/to/dbox/completion
 # 4. 使用
 d claude                 # 运行 claude (默认配置)
 d claude-zai             # 运行 claude (zai 配置)
-d claude --version       # 传递工具参数
-ds claude                # 启动 claude 容器的 bash shell
-dt claude                # 以 tmux 模式运行 claude
+d claude --version       # 带参数运行
+d -s claude              # 启动 claude 容器 shell
+d -u openclaw            # 启动 openclaw 服务（待实现）
 ```
 
 ## 命令格式
 
-### d - 运行工具脚本
-
 ```bash
-d <tool>[-<profile>] [args...]
+d [flags] [tool[-profile]] [args...]
 ```
 
-运行工具的 `tool.sh` 脚本。
+### 标志
 
-- `tool` - 工具名称（必需）
+| 标志            | 说明                       |
+| --------------- | -------------------------- |
+| `-u, --up`      | 启动服务（服务型工具）     |
+| `-d, --down`    | 停止服务（服务型工具）     |
+| `-r, --restart` | 重启服务（服务型工具）     |
+| `-l, --list`    | 列出运行中的服务型工具容器 |
+| `-s, --shell`   | 启动容器 shell             |
+| `-h, --help`    | 显示帮助                   |
+| `-v, --version` | 显示版本                   |
+
+### 参数
+
+- `tool` - 工具名称
 - `profile` - 配置名称（可选，默认 `default`），用 `-` 与工具名连接
 - `args` - 传递给工具的参数
 
-### ds - 启动 Shell
+### 示例
 
 ```bash
-ds <tool>[-<profile>]
+d claude                    # 运行 claude (默认配置)
+d claude-zai                # 运行 claude (zai 配置)
+d claude --version          # 带参数运行
+d -s claude                 # 启动 claude 容器 shell
+d -u openclaw               # 启动 openclaw 服务（待实现）
 ```
 
-直接启动容器的交互式 `/bin/bash`，进入容器 shell 进行调试或手动操作。
+## 工具类型
 
-- `tool` - 工具名称（必需）
-- `profile` - 配置名称（可选，默认 `default`）
+### 命令型工具
 
-### dt - 以 tmux 模式运行工具脚本
+每次运行创建临时容器，执行完毕后自动删除。
 
-```bash
-dt <tool>[-<profile>]
-```
+**必需文件：**
 
-在容器内以 tmux -CC 模式运行工具脚本。
+- `<tool>/tool.sh` - 工具执行脚本
 
-- `tool` - 工具名称（必需）
-- `profile` - 配置名称（可选，默认 `default`）
+### 服务型工具
 
-### 直接调用 dbox.sh
+通过 `d -u <tool>` 启动持久化服务容器。容器运行后，可通过 `d <tool> [args...]` 在该容器中执行其他命令。
 
-```bash
-dbox.sh <run|shell|tmux> <tool>[-<profile>] [args...]
-```
+**必需文件：**
 
-直接调用 `dbox.sh` 时，第一个参数指定模式。
+- `<tool>/service.sh` - 服务启动脚本
+- `<tool>/tool.sh` - 工具执行脚本（可选，用于在服务容器中执行命令）
+
+**容器特性：**
+
+- 容器名称：`dbox-<tool>-<profile>`
+- 自动重启：`--restart unless-stopped`
+- 优雅退出：30 秒
 
 ## 自动补全
 
-dbox 提供了 bash 和 zsh 的自动补全支持，可以方便地补全工具名和 profile。
+dbox 提供了 bash 和 zsh 的自动补全支持。
 
 **启用方法：**
 
@@ -123,12 +120,9 @@ source /path/to/dbox/completion
 **使用效果：**
 
 ```bash
-d <Tab>            # 列出所有工具（如 claude）
-ds <Tab>           # 列出所有工具
-dt <Tab>           # 列出所有工具
-d claude-<Tab>     # 列出 claude 工具的所有 profile
-ds claude-<Tab>    # 列出 claude 工具的所有 profile
-dt claude-<Tab>    # 列出 claude 工具的所有 profile
+d <Tab>                # 列出所有标志和工具
+d -u <Tab>             # 列出所有工具
+d claude-<Tab>         # 列出 claude 工具的所有 profile
 ```
 
 ## Profile 自动创建
@@ -144,70 +138,67 @@ dt claude-<Tab>    # 列出 claude 工具的所有 profile
 
 ```
 /sandbox/
-├── exec.sh           # 执行脚本（入口点，从项目根目录挂载）
-├── tool.sh           # 工具调用脚本（从工具目录挂载）
-├── hooks/            # Hook 文件挂载点
+├── entrypoint         # 入口脚本（从 exec.sh 挂载）
+├── tool.sh            # 工具执行脚本（从工具目录挂载）
+├── service.sh         # 服务启动脚本（服务型工具，从工具目录挂载）
+├── hooks/             # Hook 文件挂载点
 │   ├── global-pre-exec
-│   ├── global-pre-exec.local
 │   ├── tool-pre-exec
-│   ├── tool-pre-exec.local
 │   ├── profile-pre-exec
-│   ├── profile-pre-exec.local
-│   ├── global-post-exec
-│   ├── global-post-exec.local
-│   ├── tool-post-exec
-│   ├── tool-post-exec.local
-│   ├── profile-post-exec
-│   └── profile-post-exec.local
-└── env/              # 环境变量文件挂载点
+│   └── ...
+└── env/               # 环境变量文件挂载点
     ├── global
-    ├── global.local
     ├── tool
-    ├── tool.local
-    ├── profile
-    └── profile.local
+    └── profile
 ```
-
-工作目录根据 `mappings` 配置中的 `{cwd}` 动态设置。
 
 ## 架构说明
 
 ### 工具目录结构
 
-每个工具目录包含：
+```
+<tool>/
+├── tool.sh            # 工具执行脚本（必需）
+├── service.sh         # 服务启动脚本（服务型工具必需）
+├── config             # 工具配置（可选）
+├── pre-exec           # 工具级 pre-exec hook（可选）
+├── pre-exec.local     # 工具级 pre-exec hook（本地，可选）
+├── post-exec          # 工具级 post-exec hook（可选）
+├── post-exec.local    # 工具级 post-exec hook（本地，可选）
+├── mappings           # 工具级目录映射配置
+├── mappings.local     # 工具级目录映射配置（本地，可选）
+├── env                # 工具级环境变量（可选）
+├── env.local          # 工具级环境变量（本地，可选）
+├── data/              # 持久化数据（不提交到 git）
+└── profiles/
+    └── template/      # 模板目录（提交到 git）
+```
 
-- `tool.sh` - 工具调用脚本（必需），通过 `exec` 调用实际工具
-- `pre-exec` - 工具级 pre-exec hook（可选）
-- `pre-exec.local` - 工具级 pre-exec hook 本地覆盖（可选，不提交到 git）
-- `post-exec` - 工具级 post-exec hook（可选）
-- `post-exec.local` - 工具级 post-exec hook 本地覆盖（可选，不提交到 git）
-- `mappings` - 工具级目录映射配置
-- `mappings.local` - 工具级目录映射本地覆盖（可选，不提交到 git）
-- `env` - 工具级环境变量（可选）
-- `env.local` - 工具级环境变量本地覆盖（可选，不提交到 git）
-- `data` - 工具级持久化数据（可选，不提交到 git），结构由工具自行决定
-- `profiles/template/` - 模板目录（提交到 git）
-  - 根据工具需要放置配置文件、脚本等
-  - `mappings` - profile 级目录映射配置
-  - `mappings.local` - profile 级目录映射本地覆盖（可选，不提交到 git）
-  - `env` - profile 级环境变量（可选）
-  - `env.local` - profile 级环境变量本地覆盖（可选，不提交到 git）
-  - `pre-exec` - profile 级 pre-exec hook（可选）
-  - `pre-exec.local` - profile 级 pre-exec hook 本地覆盖（可选，不提交到 git）
-  - `post-exec` - profile 级 post-exec hook（可选）
-  - `post-exec.local` - profile 级 post-exec hook 本地覆盖（可选，不提交到 git）
+### 工具配置 (config)
+
+`<tool>/config` 文件用于设置工具特定的行为：
+
+```bash
+# 在 iTerm2 中使用 tmux -CC
+TMUX_IN_ITERM=true
+```
 
 ### Profile 目录结构
 
-每个 profile 从 template 创建，内容由 template 决定，通常包含：
+每个 profile 从 template 创建：
 
-- 配置文件/目录（如 `.claude/`）
-- `mappings` - 目录映射配置
-- `mappings.local` - 目录映射本地覆盖（可选，不提交到 git）
-- `pre-exec` - profile 级 pre-exec hook（可选）
-- `pre-exec.local` - profile 级 pre-exec hook 本地覆盖（可选，不提交到 git）
-- `post-exec` - profile 级 post-exec hook（可选）
-- `post-exec.local` - profile 级 post-exec hook 本地覆盖（可选，不提交到 git）
+```
+profiles/<profile>/
+├── mappings           # 目录映射配置
+├── mappings.local     # 目录映射配置（本地，可选）
+├── pre-exec           # profile 级 pre-exec hook（可选）
+├── pre-exec.local     # profile 级 pre-exec hook（本地，可选）
+├── post-exec          # profile 级 post-exec hook（可选）
+├── post-exec.local    # profile 级 post-exec hook（本地，可选）
+├── env                # profile 级环境变量（可选）
+├── env.local          # profile 级环境变量（本地，可选）
+└── ...                # 其他配置文件
+```
 
 ### Hook 执行顺序
 
@@ -221,7 +212,7 @@ dt claude-<Tab>    # 列出 claude 工具的所有 profile
 6. Profile 级 pre-exec.local
 7. 执行命令
 
-**post-exec（倒序，从高到低优先级）：**
+**post-exec（倒序）：**
 
 1. Profile 级 post-exec.local
 2. Profile 级 post-exec
@@ -229,35 +220,6 @@ dt claude-<Tab>    # 列出 claude 工具的所有 profile
 4. 工具级 post-exec
 5. 全局 post-exec.local
 6. 全局 post-exec
-
-#### data 目录
-
-`data` 目录用于存放工具的**持久化数据**，位于**工具目录下**（`<tool>/data`）。
-
-**用途：**
-
-- 在同一工具的不同 profile 之间共享配置和数据
-- 容器重启后持久化重要数据
-- 存放工具运行时需要持久化的内容（如配置、缓存、状态等）
-
-**结构：**
-
-- `data` 目录的具体结构由各工具根据自身需求决定
-- 常见子目录示例：`.config/`、`.local/`、`cache/` 等
-- 通过 `<tool>/mappings` 文件配置如何映射到容器内
-
-**映射示例：**
-
-```
-# 在 <tool>/mappings 中配置（根据工具需求调整）
-d:data/.config:/home/devuser/.config
-d:data/.local:/home/devuser/.local
-```
-
-**Git 管理：**
-
-- `data` 目录已被 `.gitignore` 忽略（`*/data/`）
-- 适合存放敏感配置、缓存数据等不应提交到 git 的内容
 
 ## 映射配置格式
 
@@ -268,7 +230,7 @@ d:data/.local:/home/devuser/.local
 # 格式：f:src:dst  (文件映射，不存在时创建空文件)
 #       d:src:dst  (目录映射，不存在时自动创建目录)
 
-# 工具级 data 目录映射（根据工具需求配置）
+# 工具级 data 目录映射
 d:data/.config:/home/devuser/.config
 d:data/.local:/home/devuser/.local
 
@@ -282,131 +244,88 @@ d:.claude:/home/devuser/.claude
 d:{cwd}:{cwd}
 ```
 
-- **文件映射 (f:)**：源文件不存在时创建空文件
-- **目录映射 (d:)**：源目录不存在时自动创建目录
+## 添加新工具
 
-支持三级 `mappings` 文件（按优先级从低到高），每一级支持 `.local` 本地覆盖：
+### 命令型工具
 
-- `mappings` - 全局目录映射配置（项目根目录，可选）
-- `mappings.local` - 全局目录映射本地覆盖（可选，不提交到 git）
-- `tool/mappings` - 工具级目录映射配置
-- `tool/mappings.local` - 工具级目录映射本地覆盖（可选，不提交到 git）
-- `tool/profiles/<profile>/mappings` - profile 级目录映射配置
-- `tool/profiles/<profile>/mappings.local` - profile 级目录映射本地覆盖（可选，不提交到 git）
+```bash
+# 1. 创建工具目录
+mkdir -p mytool/profiles/template
 
-每一级的 `.local` 文件会在该级基础文件之后加载，可以添加新的映射或覆盖已有映射。
+# 2. 添加 tool.sh
+cat > mytool/tool.sh << 'EOF'
+#!/bin/bash
+exec my-tool "$@"
+EOF
+chmod +x mytool/tool.sh
+
+# 3. 添加 mappings（可选）
+cat > mytool/mappings << 'EOF'
+d:data/.config:/home/devuser/.config
+EOF
+
+# 4. 使用
+d mytool
+```
+
+### 服务型工具
+
+```bash
+# 1. 创建工具目录
+mkdir -p myserver/profiles/template
+
+# 2. 添加 tool.sh（执行命令时使用）
+cat > myserver/tool.sh << 'EOF'
+#!/bin/bash
+exec my-server-cli "$@"
+EOF
+chmod +x myserver/tool.sh
+
+# 3. 添加 service.sh（启动服务时使用）
+cat > myserver/service.sh << 'EOF'
+#!/bin/bash
+exec my-server --port 8080
+EOF
+chmod +x myserver/service.sh
+
+# 4. 添加 mappings
+cat > myserver/mappings << 'EOF'
+d:data:/var/lib/myserver
+EOF
+
+# 5. 使用
+d -u myserver        # 启动服务
+d myserver status    # 执行命令
+d -d myserver        # 停止服务
+```
 
 ## 全局配置
 
 项目根目录支持全局级别的配置，对所有工具生效：
 
-**目录映射：**
-
-- `mappings` - 全局目录映射配置（可选）
-- `mappings.local` - 全局目录映射本地覆盖（可选，不提交到 git）
-
-**环境变量：**
-
-- `env` - 全局环境变量（可选）
-- `env.local` - 全局环境变量本地覆盖（可选，不提交到 git）
-
-**Hooks：**
-
-- `pre-exec` - 全局 pre-exec hook（可选）
-- `pre-exec.local` - 全局 pre-exec hook 本地覆盖（可选，不提交到 git）
-- `post-exec` - 全局 post-exec hook（可选）
-- `post-exec.local` - 全局 post-exec hook 本地覆盖（可选，不提交到 git）
-
-全局配置在工具级和 profile 级配置之前加载。
+- `mappings` / `mappings.local` - 全局目录映射
+- `env` / `env.local` - 全局环境变量
+- `pre-exec` / `pre-exec.local` - 全局 pre-exec hook
+- `post-exec` / `post-exec.local` - 全局 post-exec hook
 
 ## 安装常用工具
 
-项目提供了 `snippets.txt` 文件，包含常见开发工具的安装脚本片段（snippets）。
+项目提供了 `snippets.txt` 文件，包含常见开发工具的安装脚本片段。
 
 **使用方法：**
 
 1. 浏览 `snippets.txt` 查找需要的工具
-2. 将对应的代码片段复制到适当的 `pre-exec` 文件中：
-   - **全局安装**（所有工具可用）：复制到根目录的 `pre-exec.local`
-   - **工具级安装**（仅特定工具可用）：复制到 `<tool>/pre-exec.local`
-   - **profile 级安装**（仅特定配置可用）：复制到 `<tool>/profiles/<profile>/pre-exec.local`
-
-**示例：**
-
-1. 在 `snippets.txt` 中找到 Node.js 安装代码：
-
-```bash
-if ! command -v node &>/dev/null; then
-  echo -e "\n🔧 安装 Node.js...\n"
-  curl -L 'https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-arm64.tar.xz' | \
-    tar -xJ -C ~/.local --strip-components=1 --exclude='*.md' --exclude='LICENSE'
-fi
-```
-
-2. 复制到相应工具目录的 `pre-exec.local`
-
-3. 下次运行该工具时会自动安装 Node.js
-
-每个 snippet 都遵循统一的模式：先检查命令是否存在，如不存在则安装。
-
-## 添加新工具
-
-1. 创建工具目录 `mkdir toolname`
-2. 添加 `tool.sh` 工具调用脚本（必需）
-   ```bash
-   #!/bin/bash
-   exec your-tool "$@"
-   ```
-3. 添加 `mappings` 配置文件（可选）- 配置目录映射，包括 `data` 目录的映射
-4. 添加 `env` 文件（可选）- 工具级环境变量
-5. 添加 `pre-exec` hook（可选）- 容器启动前执行
-6. 添加 `post-exec` hook（可选）- 容器结束后执行
-7. 创建 `data` 目录（可选）- 存放持久化数据，结构由工具需求决定
-8. 创建 `profiles/template/` 模板目录
-   - 放置工具需要的配置文件
-   - 创建 `mappings` 配置文件
-   - 添加 `env` 文件（可选）- profile 级环境变量
-   - 添加 `pre-exec` 文件（可选）- profile 级 pre-exec hook
-   - 添加 `post-exec` 文件（可选）- profile 级 post-exec hook
-
-**本地自定义（不提交到 git）：**
-
-- `data` - 工具级持久化数据目录
-- `mappings.local` - 目录映射本地覆盖
-- `pre-exec.local` / `post-exec.local` - 工具级 hook 本地覆盖
-- `env.local` - 工具级环境变量本地覆盖
-- `profiles/<profile>/mappings.local` - profile 级目录映射本地覆盖
-- `profiles/<profile>/pre-exec.local` / `post-exec.local` - profile 级 hook 本地覆盖
-- `profiles/<profile>/env.local` - profile 级环境变量本地覆盖
+2. 将对应的代码片段复制到适当的 `pre-exec.local` 文件中
 
 ## 环境变量配置
 
-支持三级 `env` 文件（按优先级从低到高），每一级支持 `.local` 本地覆盖：
-
-- `env` - 全局环境变量（项目根目录）
-- `env.local` - 全局环境变量本地覆盖（可选，不提交到 git）
-- `tool/env` - 工具级环境变量
-- `tool/env.local` - 工具级环境变量本地覆盖（可选，不提交到 git）
-- `tool/profiles/<profile>/env` - profile 级环境变量
-- `tool/profiles/<profile>/env.local` - profile 级环境变量本地覆盖（可选，不提交到 git）
-
-这些文件会被挂载到容器的 `/sandbox/env/` 目录，并在容器启动时通过 bashrc 自动加载：
+支持三级 `env` 文件，在容器启动时自动加载：
 
 ```bash
-# 容器内的 bashrc 会按顺序加载：
-source /sandbox/env/global          # 对应项目根目录的 env
-source /sandbox/env/global.local    # 对应项目根目录的 env.local
-source /sandbox/env/tool            # 对应 tool/env
-source /sandbox/env/tool.local      # 对应 tool/env.local
-source /sandbox/env/profile         # 对应 profile/env
-source /sandbox/env/profile.local   # 对应 profile/env.local
-```
-
-每一级的 `.local` 文件会在该级基础文件之后加载，覆盖该级的设置。所有 `*.local` 文件已被 `.gitignore` 忽略。
-
-示例 `env` 文件：
-
-```bash
-export LANG=C.UTF-8
-export LC_ALL=C.UTF-8
+source /sandbox/env/global          # 项目根目录的 env
+source /sandbox/env/global.local    # 项目根目录的 env.local
+source /sandbox/env/tool            # tool/env
+source /sandbox/env/tool.local      # tool/env.local
+source /sandbox/env/profile         # profile/env
+source /sandbox/env/profile.local   # profile/env.local
 ```

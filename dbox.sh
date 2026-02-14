@@ -1,338 +1,828 @@
 #!/bin/bash
 
-# dbox 运行脚本
-# 根据调用名称决定行为：
-#   d  - 运行工具脚本 (tool.sh)
-#   ds - 启动 bash shell
-#   dt - 以 tmux 模式运行工具脚本
+# dbox - Docker 沙箱工具管理器
+# 用法: d [flags] [tool[-profile]] [args...]
 
 set -e
 
-# 配置变量
-IMAGE_NAME="dbox"
+# ===== 基础配置 =====
+DBOX_IMAGE_NAME="dbox"
+DBOX_VERSION="0.2.0"
 
-# 解析符号链接，获取真实脚本目录
-SCRIPT_SOURCE="${BASH_SOURCE[0]}"
-while [ -L "$SCRIPT_SOURCE" ]; do
-  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-  SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
-  [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+# ===== 自动初始化 =====
+# 获取脚本的真实路径（跟随符号链接）
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  LINK_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  # 如果是相对路径，基于链接所在目录转换为绝对路径
+  if [[ "$SCRIPT_PATH" != /* ]]; then
+    SCRIPT_PATH="$LINK_DIR/$SCRIPT_PATH"
+  fi
 done
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-WORKSPACE_DIR="$(pwd)"
+DBOX_ROOT="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
-# 根据调用名称决定模式
-CALLER_NAME="$(basename "$0")"
-case "$CALLER_NAME" in
-  d)
-    MODE="run"
-    ;;
-  ds)
-    MODE="shell"
-    ;;
-  dt)
-    MODE="tmux"
-    ;;
-  dbox.sh)
-    # 直接调用时，第一个参数是模式
-    if [ $# -gt 0 ]; then
-      MODE="$1"
+# ===== 工具函数 =====
+# 输出错误信息
+dbox_error() {
+  echo "错误: $*" >&2
+}
+
+# 输出信息
+dbox_info() {
+  echo "$*"
+}
+
+# 显示版本
+dbox_show_version() {
+  echo "v$DBOX_VERSION"
+}
+
+# 显示帮助
+dbox_show_help() {
+  cat <<'EOF'
+用法: d [flags] [tool[-profile]] [args...]
+
+标志:
+  -u, --up       启动服务（服务型工具）
+  -d, --down     停止服务（服务型工具）
+  -r, --restart  重启服务（服务型工具）
+  -l, --list     列出运行中的服务型工具容器
+  -s, --shell    启动容器 shell
+  -h, --help     显示帮助
+  -v, --version  显示版本
+
+示例:
+  d claude                    # 运行 claude (默认配置)
+  d claude-zai                # 运行 claude (zai 配置)
+  d claude --version          # 带参数运行
+  d -s claude                 # 启动 claude 容器 shell
+  d -u openclaw               # 启动 openclaw 服务（待实现）
+EOF
+}
+
+# ===== 参数解析函数 =====
+# 解析 tool[-profile] 格式
+dbox_parse_tool_profile() {
+  local input="$1"
+  local tool_var="$2"
+  local profile_var="$3"
+
+  if [[ "$input" == *-* ]]; then
+    eval "$tool_var='${input%%-*}'"
+    eval "$profile_var='${input#*-}'"
+  else
+    eval "$tool_var='$input'"
+    eval "$profile_var='default'"
+  fi
+}
+
+# 解析命令行参数
+# 返回: ACTION, TOOL, PROFILE, ARGS
+# 规则: 标志必须在 <tool> 之前，<tool> 之后的所有参数都传给容器
+dbox_parse_args() {
+  ACTION=""
+  TOOL=""
+  PROFILE="default"
+  ARGS=()
+
+  while [[ $# -gt 0 ]]; do
+    # 一旦 tool 已设置，后续所有参数都作为 ARGS，不再解析标志
+    if [[ -n "$TOOL" ]]; then
+      ARGS+=("$1")
       shift
-    else
-      echo "用法: dbox.sh <run|shell|tmux> <tool>[-<profile>] [args...]" >&2
-      exit 1
+      continue
     fi
-    ;;
-  *)
-    echo "错误: 未知的调用方式: $CALLER_NAME" >&2
-    exit 1
-    ;;
-esac
 
-# 默认值
-TOOL=""
-PROFILE="default"
+    case "$1" in
+      -u|--up)
+        ACTION="up"
+        shift
+        ;;
+      -d|--down)
+        ACTION="down"
+        shift
+        ;;
+      -r|--restart)
+        ACTION="restart"
+        shift
+        ;;
+      -l|--list)
+        ACTION="list"
+        shift
+        ;;
+      -s|--shell)
+        ACTION="shell"
+        shift
+        ;;
+      -h|--help)
+        ACTION="help"
+        shift
+        ;;
+      -v|--version)
+        ACTION="version"
+        shift
+        ;;
+      -*)
+        dbox_error "未知标志: $1"
+        dbox_show_help
+        exit 1
+        ;;
+      *)
+        # 第一个非标志参数是 tool[-profile]
+        dbox_parse_tool_profile "$1" TOOL PROFILE
+        shift
+        ;;
+    esac
+  done
+}
 
-# 解析参数：第一个参数必须是 tool[-profile]
-if [ $# -gt 0 ]; then
-  FIRST_ARG="$1"
-  shift
+# ===== 工具检测函数 =====
+# 检查工具目录和 tool.sh 是否存在
+dbox_check_tool() {
+  local tool="$1"
+  local tool_dir="$DBOX_ROOT/$tool"
 
-  # 解析 tool-profile 格式
-  if [[ "$FIRST_ARG" == *-* ]]; then
-    TOOL="${FIRST_ARG%%-*}"
-    PROFILE="${FIRST_ARG#*-}"
-  else
-    TOOL="$FIRST_ARG"
+  if [ -z "$tool" ]; then
+    dbox_error "必须指定工具"
+    return 1
   fi
-fi
 
-# 检查工具目录是否存在
-if [ -z "$TOOL" ]; then
-  echo "错误: 必须指定工具" >&2
-  # 根据调用方式显示用法
-  if [ "$CALLER_NAME" = "dbox.sh" ]; then
-    echo "用法: dbox.sh <run|shell|tmux> <tool>[-<profile>] [args...]" >&2
-    echo "示例: dbox.sh run claude" >&2
-    echo "      dbox.sh shell claude" >&2
-    echo "      dbox.sh tmux claude-zai" >&2
-  else
-    echo "用法: $CALLER_NAME <tool>[-<profile>] [args...]" >&2
-    echo "示例: $CALLER_NAME claude" >&2
-    echo "      $CALLER_NAME claude-zai" >&2
-    if [ "$MODE" = "run" ]; then
-      echo "      $CALLER_NAME claude --version" >&2
-    fi
+  # 验证工具名（只允许字母、数字、下划线）
+  if [[ ! "$tool" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    dbox_error "工具名称包含非法字符: $tool（只允许字母、数字、下划线）"
+    return 1
   fi
-  exit 1
-fi
 
-TOOL_DIR="$SCRIPT_DIR/$TOOL"
-if [ ! -d "$TOOL_DIR" ]; then
-  echo "错误: 工具目录不存在: $TOOL_DIR" >&2
-  exit 1
-fi
+  if [ ! -d "$tool_dir" ]; then
+    dbox_error "工具目录不存在: $tool_dir"
+    return 1
+  fi
 
-# 构建 Docker 镜像（如果不存在）
-if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
-  echo -e "📦 构建 Docker 镜像: $IMAGE_NAME\n"
-  docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
-  echo ""
-fi
+  if [ ! -f "$tool_dir/tool.sh" ]; then
+    dbox_error "工具脚本不存在: $tool_dir/tool.sh"
+    return 1
+  fi
 
-PROFILE_DIR="$TOOL_DIR/profiles/$PROFILE"
-TEMPLATE_DIR="$TOOL_DIR/profiles/template"
+  return 0
+}
 
-# 如果配置不存在，尝试创建
-if [ ! -d "$PROFILE_DIR" ]; then
-  if [ ! -d "$TEMPLATE_DIR" ]; then
-    echo "错误: 配置目录不存在: $PROFILE_DIR" >&2
-    echo "错误: 模板目录也不存在: $TEMPLATE_DIR" >&2
-    exit 1
+# 检查工具是否是服务型（存在 service.sh）
+dbox_is_service() {
+  local tool="$1"
+  [ -f "$DBOX_ROOT/$tool/service.sh" ]
+}
+
+# 检测是否是 iTerm2
+dbox_is_iterm2() {
+  [ "$TERM_PROGRAM" = "iTerm.app" ]
+}
+
+# 加载工具配置
+dbox_load_config() {
+  local tool="$1"
+  local config_file="$DBOX_ROOT/$tool/config"
+
+  # 默认值
+  TMUX_IN_ITERM=false
+
+  if [ -f "$config_file" ]; then
+    source "$config_file"
+  fi
+}
+
+# ===== 容器管理函数 =====
+# 生成容器名称
+dbox_container_name() {
+  local tool="$1"
+  local profile="${2:-default}"
+  echo "dbox-${tool}-${profile}"
+}
+
+# 确保镜像存在
+dbox_ensure_image() {
+  if ! docker image inspect "$DBOX_IMAGE_NAME" &>/dev/null; then
+    dbox_info "📦 构建 Docker 镜像: $DBOX_IMAGE_NAME"
+    docker build -t "$DBOX_IMAGE_NAME" "$DBOX_ROOT"
+    dbox_info ""
+  fi
+}
+
+# 检查容器是否运行中
+dbox_container_running() {
+  local container_name="$1"
+  docker ps --format '{{.Names}}' | grep -q "^${container_name}$"
+}
+
+# 检查容器是否存在（包括停止的）
+dbox_container_exists() {
+  local container_name="$1"
+  docker ps -a --format '{{.Names}}' | grep -q "^${container_name}$"
+}
+
+# ===== Profile 管理函数 =====
+# 验证配置名
+dbox_validate_profile_name() {
+  local name="$1"
+  if [[ ! "$name" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    dbox_error "配置名称包含非法字符: $name（只允许字母、数字、下划线）"
+    return 1
+  fi
+  return 0
+}
+
+# 确保 profile 存在
+dbox_ensure_profile() {
+  local tool="$1"
+  local profile="$2"
+  local tool_dir="$DBOX_ROOT/$tool"
+  local profile_dir="$tool_dir/profiles/$profile"
+  local template_dir="$tool_dir/profiles/template"
+
+  # 验证 profile 名称
+  if ! dbox_validate_profile_name "$profile"; then
+    return 1
+  fi
+
+  if [ -d "$profile_dir" ]; then
+    return 0
+  fi
+
+  if [ ! -d "$template_dir" ]; then
+    dbox_error "配置目录不存在: $profile_dir"
+    dbox_error "模板目录也不存在: $template_dir"
+    return 1
   fi
 
   # 询问是否创建（default 自动创建）
-  if [ "$PROFILE" = "default" ]; then
-    CREATE_PROFILE="y"
+  if [ "$profile" = "default" ]; then
+    local create_profile="y"
   else
-    echo -n "配置 '$PROFILE' 不存在，是否从模板创建？[Y/n] "
-    read -r CREATE_PROFILE
-    # 默认为 Yes
-    CREATE_PROFILE="${CREATE_PROFILE:-y}"
+    echo -n "配置 '$profile' 不存在，是否从模板创建？[Y/n] "
+    read -r create_profile
+    create_profile="${create_profile:-y}"
     echo ""
   fi
 
-  if [[ "$CREATE_PROFILE" =~ ^[Yy]$ ]]; then
-    echo -e "📁 创建配置目录: $PROFILE_DIR"
-    cp -R "$TEMPLATE_DIR" "$PROFILE_DIR"
+  if [[ "$create_profile" =~ ^[Yy]$ ]]; then
+    dbox_info "📁 创建配置目录: $profile_dir"
+    cp -R "$template_dir" "$profile_dir"
   else
-    echo "错误: 配置目录不存在: $PROFILE_DIR" >&2
-    exit 1
+    dbox_error "配置目录不存在: $profile_dir"
+    return 1
   fi
 
-  echo ""
-fi
+  dbox_info ""
+  return 0
+}
 
-# 环境变量列表
-ENV_VARS=()
+# ===== 配置加载函数 =====
+# 加载环境变量
+dbox_load_env() {
+  local tool="$1"
+  local profile="$2"
+  local result_var="$3"
 
-# 传递终端类型
-ENV_VARS+=("-e" "TERM=$TERM")
+  eval "$result_var=()"
 
-# 传递时区
-if [ -n "$TZ" ]; then
-  # 如果 TZ 环境变量已设置，直接使用
-  ENV_VARS+=("-e" "TZ=$TZ")
-elif [ -L /etc/localtime ]; then
-  # 否则检查 /etc/localtime 符号链接
-  timezone_path=$(readlink /etc/localtime)
-  if [[ "$timezone_path" == */zoneinfo/* ]]; then
-    TZ_VALUE="${timezone_path#*/zoneinfo/}"
-    ENV_VARS+=("-e" "TZ=$TZ_VALUE")
+  # 传递终端类型
+  eval "$result_var+=(\"-e\" \"TERM=$TERM\")"
+
+  # 传递时区
+  if [ -n "$TZ" ]; then
+    eval "$result_var+=(\"-e\" \"TZ=$TZ\")"
+  elif [ -L /etc/localtime ]; then
+    local timezone_path
+    timezone_path=$(readlink /etc/localtime)
+    if [[ "$timezone_path" == */zoneinfo/* ]]; then
+      local tz_value="${timezone_path#*/zoneinfo/}"
+      eval "$result_var+=(\"-e\" \"TZ=$tz_value\")"
+    fi
   fi
-fi
+}
 
-# 映射列表
-VOLUME_MOUNTS=()
+# 加载映射配置
+dbox_load_mappings() {
+  local tool="$1"
+  local profile="$2"
+  local mounts_var="$3"
+  local workdir_var="$4"
+  local workspace_dir="$(pwd)"
 
-# 映射 exec.sh
-VOLUME_MOUNTS+=("-v" "$SCRIPT_DIR/exec.sh:/sandbox/exec.sh:ro")
+  local tool_dir="$DBOX_ROOT/$tool"
+  local profile_dir="$tool_dir/profiles/$profile"
+
+  eval "$mounts_var=()"
+  eval "$workdir_var=()"
+
+  # 映射 entrypoint
+  eval "$mounts_var+=(\"-v\" \"$DBOX_ROOT/exec.sh:/sandbox/entrypoint:ro\")"
+
+  # 加载全局、工具级和 Profile 级 mappings
+  for dir in "$DBOX_ROOT" "$tool_dir" "$profile_dir"; do
+    for mappings_file in "$dir/mappings" "$dir/mappings.local"; do
+      if [ -f "$mappings_file" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+          [[ -z "$line" || "$line" == \#* ]] && continue
+
+          if [[ ! "$line" =~ ^([fd]):([^:]+):(.+)$ ]]; then
+            dbox_error "映射格式错误，必须使用 f:src:dst 或 d:src:dst 格式: $line"
+            return 1
+          fi
+
+          local map_type="${BASH_REMATCH[1]}"
+          local host_path="${BASH_REMATCH[2]}"
+          local container_path="${BASH_REMATCH[3]}"
+
+          local host_is_cwd=false
+          if [[ "$host_path" == "{cwd}" ]]; then
+            host_path="$workspace_dir"
+            host_is_cwd=true
+          fi
+          if [[ "$container_path" == "{cwd}" ]]; then
+            container_path="$workspace_dir"
+          fi
+
+          if [[ "$host_path" != /* ]]; then
+            host_path="$dir/$host_path"
+          fi
+
+          if [ "$map_type" = "d" ]; then
+            if [ ! -e "$host_path" ]; then
+              mkdir -p "$host_path"
+            elif [ ! -d "$host_path" ]; then
+              dbox_error "映射源路径不是目录: $host_path"
+              return 1
+            fi
+          else
+            if [ ! -e "$host_path" ]; then
+              touch "$host_path"
+            elif [ ! -f "$host_path" ]; then
+              dbox_error "映射源路径不是文件: $host_path"
+              return 1
+            fi
+          fi
+
+          local escaped_host_path="${host_path//\\/\\\\}"
+          escaped_host_path="${escaped_host_path//\"/\\\"}"
+          local escaped_container_path="${container_path//\\/\\\\}"
+          escaped_container_path="${escaped_container_path//\"/\\\"}"
+
+          eval "$mounts_var+=(\"-v\" \"$escaped_host_path:$escaped_container_path\")"
+
+          if [ "$host_is_cwd" = true ]; then
+            eval "$workdir_var+=(\"-w\" \"$escaped_container_path\")"
+          fi
+        done < "$mappings_file"
+      fi
+    done
+  done
+}
+
+# 加载 env 文件映射
+dbox_load_env_files() {
+  local tool="$1"
+  local profile="$2"
+  local mounts_var="$3"
+  local tool_dir="$DBOX_ROOT/$tool"
+  local profile_dir="$tool_dir/profiles/$profile"
+
+  eval "$mounts_var=()"
+
+  if [ -f "$DBOX_ROOT/env" ]; then
+    eval "$mounts_var+=(\"-v\" \"$DBOX_ROOT/env:/sandbox/env/global:ro\")"
+  fi
+  if [ -f "$DBOX_ROOT/env.local" ]; then
+    eval "$mounts_var+=(\"-v\" \"$DBOX_ROOT/env.local:/sandbox/env/global.local:ro\")"
+  fi
+  if [ -f "$tool_dir/env" ]; then
+    eval "$mounts_var+=(\"-v\" \"$tool_dir/env:/sandbox/env/tool:ro\")"
+  fi
+  if [ -f "$tool_dir/env.local" ]; then
+    eval "$mounts_var+=(\"-v\" \"$tool_dir/env.local:/sandbox/env/tool.local:ro\")"
+  fi
+  if [ -f "$profile_dir/env" ]; then
+    eval "$mounts_var+=(\"-v\" \"$profile_dir/env:/sandbox/env/profile:ro\")"
+  fi
+  if [ -f "$profile_dir/env.local" ]; then
+    eval "$mounts_var+=(\"-v\" \"$profile_dir/env.local:/sandbox/env/profile.local:ro\")"
+  fi
+}
+
+# 加载 hooks 映射
+dbox_load_hooks() {
+  local tool="$1"
+  local profile="$2"
+  local mounts_var="$3"
+  local tool_dir="$DBOX_ROOT/$tool"
+  local profile_dir="$tool_dir/profiles/$profile"
+
+  eval "$mounts_var=()"
+
+  for hook_type in pre-exec post-exec; do
+    for hook_location in "DBOX_ROOT" "tool_dir" "profile_dir"; do
+      local base_dir
+      case "$hook_location" in
+        DBOX_ROOT) base_dir="$DBOX_ROOT" ;;
+        tool_dir) base_dir="$tool_dir" ;;
+        profile_dir) base_dir="$profile_dir" ;;
+      esac
+
+      local hook_name
+      case "$hook_location" in
+        DBOX_ROOT) hook_name="global" ;;
+        tool_dir) hook_name="tool" ;;
+        profile_dir) hook_name="profile" ;;
+      esac
+
+      local hook_file="$base_dir/$hook_type"
+      if [ -f "$hook_file" ]; then
+        eval "$mounts_var+=(\"-v\" \"$hook_file:/sandbox/hooks/${hook_name}-${hook_type}:ro\")"
+      fi
+      hook_file="$base_dir/${hook_type}.local"
+      if [ -f "$hook_file" ]; then
+        eval "$mounts_var+=(\"-v\" \"$hook_file:/sandbox/hooks/${hook_name}-${hook_type}.local:ro\")"
+      fi
+    done
+  done
+}
+
+# ===== 挂载辅助函数 =====
+# 映射 gitconfig
+dbox_map_gitconfig() {
+  local mounts_var="$1"
+  eval "$mounts_var=()"
+  if [ -f "$HOME/.gitconfig" ]; then
+    eval "$mounts_var+=(\"-v\" \"$HOME/.gitconfig:/home/devuser/.gitconfig:ro\")"
+  fi
+}
 
 # 映射 tool.sh
-if [ "$MODE" = "run" ] || [ "$MODE" = "tmux" ]; then
-  if [ ! -f "$TOOL_DIR/tool.sh" ]; then
-    echo "错误: 工具调用脚本不存在: $TOOL_DIR/tool.sh" >&2
-    exit 1
+dbox_map_tool_script() {
+  local tool="$1"
+  local mounts_var="$2"
+  local tool_dir="$DBOX_ROOT/$tool"
+
+  eval "$mounts_var=()"
+
+  if [ ! -f "$tool_dir/tool.sh" ]; then
+    dbox_error "工具执行脚本不存在: $tool_dir/tool.sh"
+    return 1
   fi
-  VOLUME_MOUNTS+=("-v" "$TOOL_DIR/tool.sh:/sandbox/tool.sh:ro")
-fi
+  eval "$mounts_var+=(\"-v\" \"$tool_dir/tool.sh:/sandbox/tool.sh:ro\")"
+}
 
-# 工作目录参数
-WORKDIR_ARG=()
+# 映射 service.sh
+dbox_map_service_script() {
+  local tool="$1"
+  local mounts_var="$2"
+  local tool_dir="$DBOX_ROOT/$tool"
 
-# 加载全局、工具级和 Profile 级 mappings（按优先级：global → tool → profile，每级 .local 后加载）
-for dir in "$SCRIPT_DIR" "$TOOL_DIR" "$PROFILE_DIR"; do
-  for mappings_file in "$dir/mappings" "$dir/mappings.local"; do
-    if [ -f "$mappings_file" ]; then
-      while IFS= read -r line || [ -n "$line" ]; do
-        # 跳过空行和注释
-        [[ -z "$line" || "$line" == \#* ]] && continue
+  eval "$mounts_var=()"
 
-        # 解析 f:src:dst 或 d:src:dst
-        if [[ ! "$line" =~ ^([fd]):([^:]+):(.+)$ ]]; then
-          echo "错误: 映射格式错误，必须使用 f:src:dst 或 d:src:dst 格式: $line" >&2
-          exit 1
-        fi
+  if [ ! -f "$tool_dir/service.sh" ]; then
+    dbox_error "服务脚本不存在: $tool_dir/service.sh"
+    return 1
+  fi
+  eval "$mounts_var+=(\"-v\" \"$tool_dir/service.sh:/sandbox/service.sh:ro\")"
+}
 
-        map_type="${BASH_REMATCH[1]}"
-        host_path="${BASH_REMATCH[2]}"
-        container_path="${BASH_REMATCH[3]}"
+# ===== 容器运行函数 =====
+# 运行临时容器
+dbox_run_container() {
+  local mode="$1"
+  local tool="$2"
+  local profile="${3:-default}"
+  shift 3
+  local args=("$@")
 
-        # 支持特殊变量 {cwd}
-        host_is_cwd=false
-        if [[ "$host_path" == "{cwd}" ]]; then
-          host_path="$WORKSPACE_DIR"
-          host_is_cwd=true
-        fi
-        if [[ "$container_path" == "{cwd}" ]]; then
-          container_path="$WORKSPACE_DIR"
-        fi
+  local tool_dir="$DBOX_ROOT/$tool"
+  local profile_dir="$tool_dir/profiles/$profile"
+  local workspace_dir="$(pwd)"
 
-        # 支持相对路径
-        if [[ "$host_path" != /* ]]; then
-          host_path="$dir/$host_path"
-        fi
+  # 确保镜像存在
+  dbox_ensure_image
 
-        # 处理文件或目录
-        if [ "$map_type" = "d" ]; then
-          # 目录映射：不存在则自动创建
-          if [ ! -e "$host_path" ]; then
-            mkdir -p "$host_path"
-          elif [ ! -d "$host_path" ]; then
-            echo "错误: 映射源路径不是目录: $host_path" >&2
-            exit 1
-          fi
-        else
-          # 文件映射（f:）：不存在则创建空文件
-          if [ ! -e "$host_path" ]; then
-            touch "$host_path"
-          elif [ ! -f "$host_path" ]; then
-            echo "错误: 映射源路径不是文件: $host_path" >&2
-            exit 1
-          fi
-        fi
+  # 确保 profile 存在
+  dbox_ensure_profile "$tool" "$profile" || return 1
 
-        VOLUME_MOUNTS+=("-v" "$host_path:$container_path")
+  # 加载配置
+  local env_vars=()
+  dbox_load_env "$tool" "$profile" env_vars
 
-        # 如果 host 部分包含 {cwd}，设置工作目录
-        if [ "$host_is_cwd" = true ]; then
-          WORKDIR_ARG+=("-w" "$container_path")
-        fi
-      done < "$mappings_file"
+  local volume_mounts workdir_arg
+  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg || return 1
+
+  local env_mounts
+  dbox_load_env_files "$tool" "$profile" env_mounts
+
+  local hook_mounts
+  dbox_load_hooks "$tool" "$profile" hook_mounts
+
+  local gitconfig_mounts
+  dbox_map_gitconfig gitconfig_mounts
+
+  local tool_mounts
+  dbox_map_tool_script "$tool" tool_mounts || return 1
+
+  # 合并所有挂载
+  local all_mounts=()
+  all_mounts+=("${volume_mounts[@]}")
+  all_mounts+=("${env_mounts[@]}")
+  all_mounts+=("${hook_mounts[@]}")
+  all_mounts+=("${gitconfig_mounts[@]}")
+  all_mounts+=("${tool_mounts[@]}")
+
+  # 根据模式决定运行命令
+  local container_cmd=()
+  case "$mode" in
+    run)
+      container_cmd=("/sandbox/tool.sh" "${args[@]}")
+      ;;
+    shell)
+      container_cmd=("/bin/bash" "${args[@]}")
+      ;;
+    tmux)
+      local exec_cmd_str="/sandbox/tool.sh"
+      for arg in "${args[@]}"; do
+        exec_cmd_str="$exec_cmd_str $(printf '%q' "$arg")"
+      done
+      container_cmd=("tmux" "-CCu" "new" "$exec_cmd_str")
+      ;;
+    *)
+      dbox_error "未知的模式: $mode"
+      return 1
+      ;;
+  esac
+
+  # 检测是否在 TTY 中
+  local tty_flag=""
+  if [ -t 0 ]; then
+    tty_flag="-it"
+  fi
+
+  # 启动容器
+  docker run $tty_flag --rm --init \
+    --entrypoint /sandbox/entrypoint \
+    "${workdir_arg[@]}" \
+    "${env_vars[@]}" \
+    "${all_mounts[@]}" \
+    "$DBOX_IMAGE_NAME" \
+    "${container_cmd[@]}"
+}
+
+# 在已运行容器中执行命令
+dbox_exec_container() {
+  local tool="$1"
+  local profile="${2:-default}"
+  shift 2
+  local args=("$@")
+
+  local container_name
+  container_name="$(dbox_container_name "$tool" "$profile")"
+
+  # 检查容器是否在运行
+  if ! dbox_container_running "$container_name"; then
+    dbox_error "服务容器未运行: $container_name"
+    dbox_info "请先用以下命令启动:"
+    if [ "$profile" = "default" ]; then
+      dbox_info "  d -u ${tool}"
+    else
+      dbox_info "  d -u ${tool}-${profile}"
     fi
-  done
-done
-
-# 映射 env 文件
-if [ -f "$SCRIPT_DIR/env" ]; then
-  VOLUME_MOUNTS+=("-v" "$SCRIPT_DIR/env:/sandbox/env/global:ro")
-fi
-if [ -f "$SCRIPT_DIR/env.local" ]; then
-  VOLUME_MOUNTS+=("-v" "$SCRIPT_DIR/env.local:/sandbox/env/global.local:ro")
-fi
-if [ -f "$TOOL_DIR/env" ]; then
-  VOLUME_MOUNTS+=("-v" "$TOOL_DIR/env:/sandbox/env/tool:ro")
-fi
-if [ -f "$TOOL_DIR/env.local" ]; then
-  VOLUME_MOUNTS+=("-v" "$TOOL_DIR/env.local:/sandbox/env/tool.local:ro")
-fi
-if [ -f "$PROFILE_DIR/env" ]; then
-  VOLUME_MOUNTS+=("-v" "$PROFILE_DIR/env:/sandbox/env/profile:ro")
-fi
-if [ -f "$PROFILE_DIR/env.local" ]; then
-  VOLUME_MOUNTS+=("-v" "$PROFILE_DIR/env.local:/sandbox/env/profile.local:ro")
-fi
-
-# 映射 hook 文件
-for hook_type in pre-exec post-exec; do
-  # 全局 hooks
-  hook_file="$SCRIPT_DIR/$hook_type"
-  if [ -f "$hook_file" ]; then
-    VOLUME_MOUNTS+=("-v" "$hook_file:/sandbox/hooks/global-$hook_type:ro")
+    return 1
   fi
-  # 全局 hooks.local
-  hook_file="$SCRIPT_DIR/$hook_type.local"
-  if [ -f "$hook_file" ]; then
-    VOLUME_MOUNTS+=("-v" "$hook_file:/sandbox/hooks/global-$hook_type.local:ro")
-  fi
-  # 工具级 hooks
-  hook_file="$TOOL_DIR/$hook_type"
-  if [ -f "$hook_file" ]; then
-    VOLUME_MOUNTS+=("-v" "$hook_file:/sandbox/hooks/tool-$hook_type:ro")
-  fi
-  # 工具级 hooks.local
-  hook_file="$TOOL_DIR/$hook_type.local"
-  if [ -f "$hook_file" ]; then
-    VOLUME_MOUNTS+=("-v" "$hook_file:/sandbox/hooks/tool-$hook_type.local:ro")
-  fi
-  # Profile 级 hooks
-  hook_file="$PROFILE_DIR/$hook_type"
-  if [ -f "$hook_file" ]; then
-    VOLUME_MOUNTS+=("-v" "$hook_file:/sandbox/hooks/profile-$hook_type:ro")
-  fi
-  # Profile 级 hooks.local
-  hook_file="$PROFILE_DIR/$hook_type.local"
-  if [ -f "$hook_file" ]; then
-    VOLUME_MOUNTS+=("-v" "$hook_file:/sandbox/hooks/profile-$hook_type.local:ro")
-  fi
-done
 
-# 映射 gitconfig
-if [ -f "$HOME/.gitconfig" ]; then
-  VOLUME_MOUNTS+=("-v" "$HOME/.gitconfig:/home/devuser/.gitconfig:ro")
-fi
+  docker exec -it "$container_name" /sandbox/entrypoint /sandbox/tool.sh "${args[@]}"
+}
 
-# 根据模式决定运行什么命令
-CONTAINER_CMD=()
-case "$MODE" in
-  run)
-    CONTAINER_CMD=("/sandbox/tool.sh" "$@")
-    ;;
-  shell)
-    CONTAINER_CMD=("/bin/bash" "$@")
-    ;;
-  tmux)
-    tool_cmd_str="/sandbox/tool.sh"
-    for arg in "$@"; do
-      # 使用 printf %q 来安全地转义参数
-      tool_cmd_str="$tool_cmd_str $(printf '%q' "$arg")"
-    done
-    CONTAINER_CMD=("tmux" "-CCu" "new" "$tool_cmd_str")
-    ;;
-  *)
-    echo "错误: 未知的模式: $MODE" >&2
-    exit 1
-    ;;
-esac
+# 启动容器 shell
+dbox_shell_container() {
+  local tool="$1"
+  local profile="${2:-default}"
 
-echo "🚀 启动沙箱容器..."
-echo "   工具: $TOOL"
-echo "   配置: $PROFILE"
-if [ ${#WORKDIR_ARG[@]} -gt 0 ]; then
-  echo "   工作目录: $WORKSPACE_DIR"
-fi
+  local container_name
+  container_name="$(dbox_container_name "$tool" "$profile")"
 
-# 检测是否在 TTY 中
-TTY_FLAG=""
-if [ -t 0 ]; then
-  TTY_FLAG="-it"
-fi
+  # 服务型：在已运行容器中进入 shell
+  if dbox_is_service "$tool"; then
+    if ! dbox_container_running "$container_name"; then
+      dbox_error "服务容器未运行: $container_name"
+      dbox_info "请先用以下命令启动:"
+      dbox_info "  d -u ${tool}"
+      return 1
+    fi
 
-# 启动容器
-docker run $TTY_FLAG --rm --init \
-  --entrypoint /sandbox/exec.sh \
-  "${WORKDIR_ARG[@]}" \
-  "${ENV_VARS[@]}" \
-  "${VOLUME_MOUNTS[@]}" \
-  "$IMAGE_NAME" \
-  "${CONTAINER_CMD[@]}"
+    docker exec -it "$container_name" /bin/bash
+  else
+    # 命令型：启动新容器进入 shell
+    dbox_run_container "shell" "$tool" "$profile"
+  fi
+}
+
+# ===== 服务管理函数 =====
+# 启动服务容器
+dbox_start_service() {
+  local tool="$1"
+  local profile="${2:-default}"
+
+  local tool_dir="$DBOX_ROOT/$tool"
+  local profile_dir="$tool_dir/profiles/$profile"
+
+  local container_name
+  container_name="$(dbox_container_name "$tool" "$profile")"
+
+  # 检查是否已在运行
+  if dbox_container_running "$container_name"; then
+    dbox_info "✓ 服务已在运行: $container_name"
+    return 0
+  fi
+
+  # 检查是否存在但已停止
+  if dbox_container_exists "$container_name"; then
+    dbox_info "启动已存在的容器: $container_name"
+    docker start "$container_name"
+    dbox_info "✓ 服务已启动: $container_name"
+    return 0
+  fi
+
+  # 确保镜像存在
+  dbox_ensure_image
+
+  # 确保 profile 存在
+  dbox_ensure_profile "$tool" "$profile" || return 1
+
+  # 加载配置
+  local env_vars=()
+  dbox_load_env "$tool" "$profile" env_vars
+
+  local volume_mounts workdir_arg
+  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg || return 1
+
+  local env_mounts
+  dbox_load_env_files "$tool" "$profile" env_mounts
+
+  local hook_mounts
+  dbox_load_hooks "$tool" "$profile" hook_mounts
+
+  local gitconfig_mounts
+  dbox_map_gitconfig gitconfig_mounts
+
+  # 检查 service.sh 是否存在
+  if [ ! -f "$tool_dir/service.sh" ]; then
+    dbox_error "$tool 不是服务型工具"
+    return 1
+  fi
+
+  local service_mounts
+  dbox_map_service_script "$tool" service_mounts || return 1
+  local start_cmd="/sandbox/service.sh"
+
+  # 合并所有挂载
+  local all_mounts=()
+  all_mounts+=("${volume_mounts[@]}")
+  all_mounts+=("${env_mounts[@]}")
+  all_mounts+=("${hook_mounts[@]}")
+  all_mounts+=("${gitconfig_mounts[@]}")
+  if [ -n "${service_mounts:-}" ]; then
+    all_mounts+=("${service_mounts[@]}")
+  fi
+
+  # 启动容器（后台运行）
+  docker run -d \
+    --name "$container_name" \
+    --restart unless-stopped \
+    --init \
+    --entrypoint /sandbox/entrypoint \
+    "${workdir_arg[@]}" \
+    "${env_vars[@]}" \
+    "${all_mounts[@]}" \
+    "$DBOX_IMAGE_NAME" \
+    $start_cmd > /dev/null
+
+  dbox_info "✓ 服务已启动: $container_name"
+}
+
+# 停止服务容器
+dbox_stop_service() {
+  local tool="$1"
+  local profile="${2:-default}"
+
+  local container_name
+  container_name="$(dbox_container_name "$tool" "$profile")"
+
+  # 检查容器是否存在
+  if ! dbox_container_exists "$container_name"; then
+    dbox_error "容器不存在: $container_name"
+    return 1
+  fi
+
+  # Graceful shutdown (30秒)
+  docker stop -t 30 "$container_name" > /dev/null
+  docker rm "$container_name" > /dev/null
+
+  dbox_info "✓ 服务已停止: $container_name"
+}
+
+# 重启服务容器
+dbox_restart_service() {
+  local tool="$1"
+  local profile="${2:-default}"
+
+  dbox_stop_service "$tool" "$profile" 2>/dev/null || true
+  dbox_start_service "$tool" "$profile"
+}
+
+# 列出服务容器
+dbox_list_services() {
+  docker ps --filter "name=dbox-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null
+}
+
+# ===== 主入口 =====
+main() {
+  dbox_parse_args "$@"
+
+  case "$ACTION" in
+    help)
+      dbox_show_help
+      exit 0
+      ;;
+    version)
+      dbox_show_version
+      exit 0
+      ;;
+    list)
+      dbox_list_services
+      exit 0
+      ;;
+    up)
+      if [ -z "$TOOL" ]; then
+        dbox_error "必须指定工具"
+        dbox_show_help
+        exit 1
+      fi
+      dbox_check_tool "$TOOL" || exit 1
+      if ! dbox_is_service "$TOOL"; then
+        dbox_error "$TOOL 不是服务型工具"
+        exit 1
+      fi
+      dbox_start_service "$TOOL" "$PROFILE"
+      ;;
+    down)
+      if [ -z "$TOOL" ]; then
+        dbox_error "必须指定工具"
+        dbox_show_help
+        exit 1
+      fi
+      dbox_stop_service "$TOOL" "$PROFILE"
+      ;;
+    restart)
+      if [ -z "$TOOL" ]; then
+        dbox_error "必须指定工具"
+        dbox_show_help
+        exit 1
+      fi
+      dbox_restart_service "$TOOL" "$PROFILE"
+      ;;
+    shell)
+      if [ -z "$TOOL" ]; then
+        dbox_error "必须指定工具"
+        dbox_show_help
+        exit 1
+      fi
+      dbox_check_tool "$TOOL" || exit 1
+      dbox_shell_container "$TOOL" "$PROFILE"
+      ;;
+    "")
+      # 无标志，执行工具
+      if [ -z "$TOOL" ]; then
+        dbox_show_help
+        exit 0
+      fi
+      dbox_check_tool "$TOOL" || exit 1
+
+      # 加载工具配置
+      dbox_load_config "$TOOL"
+
+      if dbox_is_service "$TOOL"; then
+        # 服务型：在已运行容器中执行
+        dbox_exec_container "$TOOL" "$PROFILE" "${ARGS[@]}"
+      else
+        # 命令型：判断是否使用 tmux 模式
+        local mode="run"
+        if dbox_is_iterm2 && [ "$TMUX_IN_ITERM" = "true" ]; then
+          mode="tmux"
+        fi
+        dbox_run_container "$mode" "$TOOL" "$PROFILE" "${ARGS[@]}"
+      fi
+      ;;
+    *)
+      dbox_error "未知操作: $ACTION"
+      dbox_show_help
+      exit 1
+      ;;
+  esac
+}
+
+# 执行主入口
+main "$@"
