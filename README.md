@@ -227,10 +227,12 @@ profiles/<profile>/
 
 ```
 # 注释以 # 开头
-# 格式：f:src:dst  (文件映射，不存在时创建空文件)
-#       d:src:dst  (目录映射，不存在时自动创建目录)
+# 格式：
+#   f:主机路径:容器路径  (文件映射，不存在时创建空文件)
+#   d:主机路径:容器路径  (目录映射，不存在时自动创建目录)
+#   p:主机端口:容器端口  (端口映射，仅服务型工具的 profile 级别)
 
-# 工具级 data 目录映射
+# 目录映射示例
 d:data/.config:/home/devuser/.config
 d:data/.local:/home/devuser/.local
 
@@ -242,8 +244,13 @@ d:.claude:/home/devuser/.claude
 
 # 特殊变量 {cwd} 表示当前工作目录
 d:{cwd}:{cwd}
+
+# 端口映射（仅服务型工具，仅 profile 级别生效）
+# p:8080:8080
+# p:3001:3000
 ```
 
+**注意：** 端口映射 (`p:...`) 仅在服务型工具的 profile 级别 mappings 中生效，在其他级别定义会导致错误。
 ## 添加新工具
 
 ### 命令型工具

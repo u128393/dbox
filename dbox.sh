@@ -277,6 +277,15 @@ dbox_ensure_profile() {
 }
 
 # ===== 配置加载函数 =====
+# 验证端口号是否有效 (1-65535)
+dbox_validate_port() {
+  local port="$1"
+  if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    return 1
+  fi
+  return 0
+}
+
 # 加载环境变量
 dbox_load_env() {
   local tool="$1"
@@ -307,6 +316,7 @@ dbox_load_mappings() {
   local profile="$2"
   local mounts_var="$3"
   local workdir_var="$4"
+  local ports_var="$5"
   local workspace_dir="$(pwd)"
 
   local tool_dir="$DBOX_ROOT/$tool"
@@ -314,25 +324,56 @@ dbox_load_mappings() {
 
   eval "$mounts_var=()"
   eval "$workdir_var=()"
+  eval "$ports_var=()"
 
   # 映射 entrypoint
   eval "$mounts_var+=(\"-v\" \"$DBOX_ROOT/exec.sh:/sandbox/entrypoint:ro\")"
 
+  local current_mapping_level=""
+
   # 加载全局、工具级和 Profile 级 mappings
   for dir in "$DBOX_ROOT" "$tool_dir" "$profile_dir"; do
+    if [ "$dir" = "$DBOX_ROOT" ]; then
+      current_mapping_level="global"
+    elif [ "$dir" = "$tool_dir" ]; then
+      current_mapping_level="tool"
+    else
+      current_mapping_level="profile"
+    fi
     for mappings_file in "$dir/mappings" "$dir/mappings.local"; do
       if [ -f "$mappings_file" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
           [[ -z "$line" || "$line" == \#* ]] && continue
 
-          if [[ ! "$line" =~ ^([fd]):([^:]+):(.+)$ ]]; then
-            dbox_error "映射格式错误，必须使用 f:src:dst 或 d:src:dst 格式: $line"
+          if [[ ! "$line" =~ ^([fdp]):([^:]+):(.+)$ ]]; then
+            dbox_error "映射格式错误，必须使用 f:src:dst、d:src:dst 或 p:host_port:container_port 格式: $line"
             return 1
           fi
 
           local map_type="${BASH_REMATCH[1]}"
           local host_path="${BASH_REMATCH[2]}"
           local container_path="${BASH_REMATCH[3]}"
+
+          if [ "$map_type" = "p" ]; then
+            # 端口映射处理
+            local host_port="${BASH_REMATCH[2]}"
+            local container_port="${BASH_REMATCH[3]}"
+
+            # 验证端口格式
+            if ! dbox_validate_port "$host_port" || ! dbox_validate_port "$container_port"; then
+              dbox_error "映射格式错误，端口必须为 1-65535 的数字: $line"
+              return 1
+            fi
+
+            # 检查是否在 profile 级别
+            if [ "$current_mapping_level" != "profile" ]; then
+              dbox_error "端口映射 (p:...) 仅允许在 profile 级别 mappings 中定义: $line"
+              return 1
+            fi
+
+            eval "$ports_var+=(\"-p\" \"${host_port}:${container_port}\")"
+            continue
+          fi
 
           local host_is_cwd=false
           if [[ "$host_path" == "{cwd}" ]]; then
@@ -510,8 +551,14 @@ dbox_run_container() {
   local env_vars=()
   dbox_load_env "$tool" "$profile" env_vars
 
-  local volume_mounts workdir_arg
-  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg || return 1
+  local volume_mounts workdir_arg port_mappings
+  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg port_mappings || return 1
+
+  # 命令型工具不支持端口映射
+  if [ ${#port_mappings[@]} -gt 0 ]; then
+    dbox_error "端口映射 (p:...) 仅支持服务型工具"
+    return 1
+  fi
 
   local env_mounts
   dbox_load_env_files "$tool" "$profile" env_mounts
@@ -656,8 +703,8 @@ dbox_start_service() {
   local env_vars=()
   dbox_load_env "$tool" "$profile" env_vars
 
-  local volume_mounts workdir_arg
-  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg || return 1
+  local volume_mounts workdir_arg port_mappings
+  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg port_mappings || return 1
 
   local env_mounts
   dbox_load_env_files "$tool" "$profile" env_mounts
@@ -696,6 +743,7 @@ dbox_start_service() {
     --entrypoint /sandbox/entrypoint \
     "${workdir_arg[@]}" \
     "${env_vars[@]}" \
+    "${port_mappings[@]}" \
     "${all_mounts[@]}" \
     "$DBOX_IMAGE_NAME" \
     $start_cmd > /dev/null
