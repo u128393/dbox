@@ -148,9 +148,9 @@ dbox_check_tool() {
     return 1
   fi
 
-  # 验证工具名（只允许字母、数字、下划线）
-  if [[ ! "$tool" =~ ^[a-zA-Z0-9_]+$ ]]; then
-    dbox_error "工具名称包含非法字符: $tool（只允许字母、数字、下划线）"
+  # 验证工具名（只允许字母、数字、下划线、横杠）
+  if [[ ! "$tool" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    dbox_error "工具名称包含非法字符: $tool（只允许字母、数字、下划线、横杠）"
     return 1
   fi
 
@@ -224,8 +224,8 @@ dbox_container_exists() {
 # 验证配置名
 dbox_validate_profile_name() {
   local name="$1"
-  if [[ ! "$name" =~ ^[a-zA-Z0-9_]+$ ]]; then
-    dbox_error "配置名称包含非法字符: $name（只允许字母、数字、下划线）"
+  if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    dbox_error "配置名称包含非法字符: $name（只允许字母、数字、下划线、横杠）"
     return 1
   fi
   return 0
