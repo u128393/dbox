@@ -1,0 +1,1 @@
+alias codex='_args=(); [ "$NO_SKIP_PERMISSIONS" != "1" ] && _args+=(--dangerously-bypass-approvals-and-sandbox); codex "${_args[@]}"'

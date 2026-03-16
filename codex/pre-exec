@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -e
+
+if ! command -v node &>/dev/null; then
+  echo -e "\n🔧 安装 Node.js...\n"
+  curl -L 'https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-arm64.tar.xz' | \
+    tar -xJ -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/include/*' '*/lib/*' '*/share/*'
+  echo ""
+fi
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "安装 Codex CLI..."
+  npm install -g @openai/codex
+  echo ""
+fi
+
+CODEX_DIR="$HOME/.codex"
+CONFIG_TOML="$CODEX_DIR/config.toml"
+AUTH_JSON="$CODEX_DIR/auth.json"
+
+if [[ ! -f "$CONFIG_TOML" && ! -f "$AUTH_JSON" ]]; then
+  read -p "🔔 Codex 尚未初始化，是否配置三方 OpenAI 兼容接口？[y/N] " CONFIGURE_THIRD_PARTY
+
+  if [[ $CONFIGURE_THIRD_PARTY =~ ^[Yy]$ ]]; then
+    echo ""
+    read -p $'\033[1;31m*\033[0m OPENAI_BASE_URL: ' OPENAI_BASE_URL
+    read -p $'\033[1;31m*\033[0m OPENAI_API_KEY: ' OPENAI_API_KEY
+
+    mkdir -p "$CODEX_DIR"
+
+    cat > "$CONFIG_TOML" <<EOF
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "$OPENAI_BASE_URL"
+EOF
+
+    jq -n --arg api_key "$OPENAI_API_KEY" '{OPENAI_API_KEY: $api_key}' > "$AUTH_JSON"
+  fi
+fi

@@ -42,6 +42,7 @@ source /path/to/dbox/completion
 d claude                 # 运行 claude (默认配置)
 d claude-zai             # 运行 claude (zai 配置)
 d claude --version       # 带参数运行
+d codex                  # 运行 codex (默认配置)
 d -s claude              # 启动 claude 容器 shell
 d -u openclaw            # 启动 openclaw 服务（待实现）
 ```
@@ -76,6 +77,7 @@ d [flags] [tool[-profile]] [args...]
 d claude                    # 运行 claude (默认配置)
 d claude-zai                # 运行 claude (zai 配置)
 d claude --version          # 带参数运行
+d codex                     # 运行 codex (默认配置)
 d -s claude                 # 启动 claude 容器 shell
 d -u openclaw               # 启动 openclaw 服务（待实现）
 ```
@@ -251,6 +253,7 @@ d:{cwd}:{cwd}
 ```
 
 **注意：** 端口映射 (`p:...`) 仅在服务型工具的 profile 级别 mappings 中生效，在其他级别定义会导致错误。
+
 ## 添加新工具
 
 ### 命令型工具
