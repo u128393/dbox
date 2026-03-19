@@ -4,31 +4,51 @@
 # 每个安装段都遵循：检查命令是否存在 -> 如不存在则安装 的模式
 
 # =============================================================================
-# 安装 Python
-# -----------------------------------------------------------------------------
-if ! command -v python3 &>/dev/null; then
-  echo -e "\n🔧 安装 Python...\n"
-  curl -L 'https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.13.12+20260211-aarch64-unknown-linux-musl-install_only_stripped.tar.gz' | \
-    tar -xz -C ~/.local --strip-components=1
-fi
-
-# =============================================================================
-# 安装 Node.js
-# -----------------------------------------------------------------------------
-if ! command -v node &>/dev/null; then
-  echo -e "\n🔧 安装 Node.js...\n"
-  curl -L 'https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-arm64.tar.xz' | \
-    tar -xJ -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/include/*' '*/lib/*' '*/share/*'
-fi
-
-# =============================================================================
 # 安装 Go
 # -----------------------------------------------------------------------------
 # * 需要在 `mappings.local` 中添加 `d:data/go:/home/devuser/go`
 # * 需要在 `env.local` 中添加 `export PATH="/home/devuser/go/bin:$PATH"`
 # -----------------------------------------------------------------------------
 if ! command -v go &>/dev/null; then
-  echo -e "\n🔧 安装 Go...\n"
+  echo -e "🔧 安装 Go...\n"
   curl -L 'https://dl.google.com/go/go1.24.13.linux-arm64.tar.gz' | \
     tar -xz -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/pkg/*' '*/src/*' '*/go.env'
+  echo ""
+fi
+
+# =============================================================================
+# 安装 Node.js
+# -----------------------------------------------------------------------------
+if ! command -v node &>/dev/null; then
+  echo -e "🔧 安装 Node.js...\n"
+  curl -L 'https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-arm64.tar.xz' | \
+    tar -xJ -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/include/*' '*/lib/*' '*/share/*'
+  echo ""
+fi
+
+# =============================================================================
+# 安装 Python
+# -----------------------------------------------------------------------------
+if ! command -v python3 &>/dev/null; then
+  echo -e "🔧 安装 Python...\n"
+  curl -L 'https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.13.12+20260211-aarch64-unknown-linux-musl-install_only_stripped.tar.gz' | \
+    tar -xz -C ~/.local --strip-components=1
+  echo ""
+fi
+
+# =============================================================================
+# 安装 Rust
+# -----------------------------------------------------------------------------
+# * 需要在 `env.local` 中添加：
+#   `export CARGO_HOME="/home/devuser/.local/share/cargo"`
+#   `export CARGO_INSTALL_ROOT="/home/devuser/.local"`
+# -----------------------------------------------------------------------------
+if ! command -v rustc &>/dev/null; then
+  echo -e "🔧 安装 Rust...\n"
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  curl -L 'https://static.rust-lang.org/dist/2026-03-05/rust-1.94.0-aarch64-unknown-linux-gnu.tar.xz' -o "$tmpdir/rust.tar.xz"
+  tar -xJf "$tmpdir/rust.tar.xz" -C "$tmpdir"
+  "$tmpdir/rust-1.94.0-aarch64-unknown-linux-gnu/install.sh" --prefix="$HOME/.local" --disable-ldconfig
+  echo ""
 fi
