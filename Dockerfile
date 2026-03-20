@@ -6,6 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # 安装基础依赖
 RUN apt-get update && apt-get install -y \
+    bubblewrap \
     build-essential \
     ca-certificates \
     curl \

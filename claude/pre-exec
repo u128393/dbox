@@ -3,15 +3,15 @@
 set -e
 
 if ! command -v claude &>/dev/null; then
-  echo -e "🔧 Claude 未安装，正在使用官方脚本安装...\n"
-  curl -fsSL https://claude.ai/install.sh | bash
+  echo -e "🔧 安装 Claude...\n"
+  curl -fsSL https://claude.ai/install.sh | bash -s 2.1.71
 fi
 
 CLAUDE_JSON="$HOME/.claude.json"
 SETTINGS_JSON="$HOME/.claude/settings.json"
 
 if [[ ! -f "$CLAUDE_JSON" ]] || ! jq -e '.hasCompletedOnboarding == true' "$CLAUDE_JSON" &>/dev/null; then
-  read -p "🔔 Claude 尚未初始化，是否配置环境变量连接三方平台？[y/N] "
+  read -p "🔔 Claude 未初始化，是否配置三方接口？[y/N] "
 
   if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo ""
@@ -48,5 +48,7 @@ if [[ ! -f "$CLAUDE_JSON" ]] || ! jq -e '.hasCompletedOnboarding == true' "$CLAU
     fi
 
     jq -S '.hasCompletedOnboarding = true' "$CLAUDE_JSON" | sponge "$CLAUDE_JSON"
+
+    echo ""
   fi
 fi

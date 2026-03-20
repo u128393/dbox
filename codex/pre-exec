@@ -3,14 +3,14 @@
 set -e
 
 if ! command -v node &>/dev/null; then
-  echo -e "\n🔧 安装 Node.js...\n"
+  echo -e "🔧 安装 Node.js...\n"
   curl -L 'https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-arm64.tar.xz' | \
     tar -xJ -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/include/*' '*/lib/*' '*/share/*'
   echo ""
 fi
 
 if ! command -v codex >/dev/null 2>&1; then
-  echo "安装 Codex CLI..."
+  echo "🔧 安装 Codex CLI..."
   npm install -g @openai/codex
   echo ""
 fi
@@ -20,7 +20,7 @@ CONFIG_TOML="$CODEX_DIR/config.toml"
 AUTH_JSON="$CODEX_DIR/auth.json"
 
 if [[ ! -f "$CONFIG_TOML" && ! -f "$AUTH_JSON" ]]; then
-  read -p "🔔 Codex 尚未初始化，是否配置三方 OpenAI 兼容接口？[y/N] " CONFIGURE_THIRD_PARTY
+  read -p "🔔 Codex 未初始化，是否配置三方接口？[y/N] " CONFIGURE_THIRD_PARTY
 
   if [[ $CONFIGURE_THIRD_PARTY =~ ^[Yy]$ ]]; then
     echo ""
