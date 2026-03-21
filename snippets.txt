@@ -31,7 +31,7 @@ fi
 # -----------------------------------------------------------------------------
 if ! command -v python3 &>/dev/null; then
   echo -e "🔧 安装 Python...\n"
-  curl -L 'https://github.com/astral-sh/python-build-standalone/releases/download/20260211/cpython-3.13.12+20260211-aarch64-unknown-linux-musl-install_only_stripped.tar.gz' | \
+  curl -L 'https://github.com/astral-sh/python-build-standalone/releases/download/20260320/cpython-3.13.12+20260320-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz' | \
     tar -xz -C ~/.local --strip-components=1
   echo ""
 fi
