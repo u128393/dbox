@@ -12,7 +12,13 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     jq \
+    libglib2.0-dev \
+    libgtk-3-dev \
+    libjavascriptcoregtk-4.1-dev \
+    libsoup-3.0-dev \
+    libwebkit2gtk-4.1-dev \
     moreutils \
+    pkg-config \
     tmux \
     vim \
     && rm -rf /var/lib/apt/lists/*
