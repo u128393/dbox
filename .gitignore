@@ -1,6 +1,10 @@
 # 本地覆盖文件（所有目录）
 *.local
 
+# JetBrains IDE
+.idea/
+*.iml
+
 # 工具数据目录
 */data
 
