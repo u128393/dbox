@@ -1,0 +1,16 @@
+#!/bin/bash
+
+set -e
+
+if ! command -v node &>/dev/null; then
+  echo -e "🔧 安装 Node.js...\n"
+  curl -L 'https://nodejs.org/dist/v24.13.0/node-v24.13.0-linux-arm64.tar.xz' | \
+    tar -xJ -C ~/.local --strip-components=1 --wildcards '*/bin/*' '*/include/*' '*/lib/*' '*/share/*'
+  echo ""
+fi
+
+if ! command -v opencode >/dev/null 2>&1; then
+  echo "🔧 安装 OpenCode..."
+  npm i -g opencode-ai
+  echo ""
+fi

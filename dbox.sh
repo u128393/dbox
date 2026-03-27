@@ -48,7 +48,7 @@ dbox_show_help() {
   -d, --down     停止服务（服务型工具）
   -r, --restart  重启服务（服务型工具）
   -l, --list     列出运行中的服务型工具容器
-  -s, --shell    启动容器 shell
+  -s, --shell    启动容器 shell（行为由 COMMAND_CONTAINER 决定）
   -h, --help     显示帮助
   -v, --version  显示版本
 
@@ -183,12 +183,35 @@ dbox_is_iterm2() {
 dbox_load_config() {
   local tool="$1"
   local config_file="$DBOX_ROOT/$tool/config"
+  local tool_has_service=false
+
+  if dbox_is_service "$tool"; then
+    tool_has_service=true
+  fi
 
   # 默认值
+  if [ "$tool_has_service" = true ]; then
+    COMMAND_CONTAINER="service"
+  else
+    COMMAND_CONTAINER="new"
+  fi
   TMUX_IN_ITERM=false
 
   if [ -f "$config_file" ]; then
     source "$config_file"
+  fi
+
+  case "$COMMAND_CONTAINER" in
+    new|service)
+      ;;
+    *)
+      dbox_error "工具配置 COMMAND_CONTAINER 只能是 new 或 service: $COMMAND_CONTAINER"
+      return 1
+      ;;
+  esac
+
+  if [ "$tool_has_service" != true ] && [ "$COMMAND_CONTAINER" = "service" ]; then
+    COMMAND_CONTAINER="new"
   fi
 }
 
@@ -249,12 +272,6 @@ dbox_ensure_profile() {
     return 0
   fi
 
-  if [ ! -d "$template_dir" ]; then
-    dbox_error "配置目录不存在: $profile_dir"
-    dbox_error "模板目录也不存在: $template_dir"
-    return 1
-  fi
-
   # 询问是否创建（default 自动创建）
   if [ "$profile" = "default" ]; then
     local create_profile="y"
@@ -267,7 +284,11 @@ dbox_ensure_profile() {
 
   if [[ "$create_profile" =~ ^[Yy]$ ]]; then
     dbox_info "📁 创建配置目录: $profile_dir"
-    cp -R "$template_dir" "$profile_dir"
+    if [ -d "$template_dir" ]; then
+      cp -R "$template_dir" "$profile_dir"
+    else
+      mkdir -p "$profile_dir"
+    fi
   else
     dbox_error "配置目录不存在: $profile_dir"
     return 1
@@ -315,9 +336,10 @@ dbox_load_env() {
 dbox_load_mappings() {
   local tool="$1"
   local profile="$2"
-  local mounts_var="$3"
-  local workdir_var="$4"
-  local ports_var="$5"
+  local mapping_mode="$3"
+  local mounts_var="$4"
+  local workdir_var="$5"
+  local ports_var="$6"
   local workspace_dir="$(pwd)"
 
   local tool_dir="$DBOX_ROOT/$tool"
@@ -346,19 +368,41 @@ dbox_load_mappings() {
         while IFS= read -r line || [ -n "$line" ]; do
           [[ -z "$line" || "$line" == \#* ]] && continue
 
-          if [[ ! "$line" =~ ^([fdp]):([^:]+):(.+)$ ]]; then
-            dbox_error "映射格式错误，必须使用 f:src:dst、d:src:dst 或 p:host_port:container_port 格式: $line"
+          local map_scope=""
+          local map_type=""
+          local host_path=""
+          local container_path=""
+
+          if [[ "$line" =~ ^p:([^:]+):(.+)$ ]]; then
+            dbox_error "端口映射必须显式使用 service:p:... 格式: $line"
+            return 1
+          elif [[ "$line" =~ ^(command|service):([fdp]):([^:]+):(.+)$ ]]; then
+            map_scope="${BASH_REMATCH[1]}"
+            map_type="${BASH_REMATCH[2]}"
+            host_path="${BASH_REMATCH[3]}"
+            container_path="${BASH_REMATCH[4]}"
+          elif [[ "$line" =~ ^([fd]):([^:]+):(.+)$ ]]; then
+            map_type="${BASH_REMATCH[1]}"
+            host_path="${BASH_REMATCH[2]}"
+            container_path="${BASH_REMATCH[3]}"
+          else
+            dbox_error "映射格式错误，必须使用 f:src:dst、d:src:dst、command:f:src:dst、command:d:src:dst、service:f:src:dst、service:d:src:dst 或 service:p:host_port:container_port 格式: $line"
             return 1
           fi
 
-          local map_type="${BASH_REMATCH[1]}"
-          local host_path="${BASH_REMATCH[2]}"
-          local container_path="${BASH_REMATCH[3]}"
+          if [ "$map_scope" = "command" ] && [ "$map_type" = "p" ]; then
+            dbox_error "端口映射不支持 command 作用域，请使用 service:p:...: $line"
+            return 1
+          fi
+
+          if [ -n "$map_scope" ] && [ "$map_scope" != "$mapping_mode" ]; then
+            continue
+          fi
 
           if [ "$map_type" = "p" ]; then
             # 端口映射处理
-            local host_port="${BASH_REMATCH[2]}"
-            local container_port="${BASH_REMATCH[3]}"
+            local host_port="$host_path"
+            local container_port="$container_path"
 
             # 验证端口格式
             if ! dbox_validate_port "$host_port" || ! dbox_validate_port "$container_port"; then
@@ -370,6 +414,10 @@ dbox_load_mappings() {
             if [ "$current_mapping_level" != "profile" ]; then
               dbox_error "端口映射 (p:...) 仅允许在 profile 级别 mappings 中定义: $line"
               return 1
+            fi
+
+            if [ "$mapping_mode" != "service" ]; then
+              continue
             fi
 
             eval "$ports_var+=(\"-p\" \"${host_port}:${container_port}\")"
@@ -553,11 +601,11 @@ dbox_run_container() {
   dbox_load_env "$tool" "$profile" env_vars
 
   local volume_mounts workdir_arg port_mappings
-  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg port_mappings || return 1
+  dbox_load_mappings "$tool" "$profile" "command" volume_mounts workdir_arg port_mappings || return 1
 
-  # 命令型工具不支持端口映射
+  # command 模式不支持端口映射
   if [ ${#port_mappings[@]} -gt 0 ]; then
-    dbox_error "端口映射 (p:...) 仅支持服务型工具"
+    dbox_error "端口映射 (p:...) 仅支持 service 模式"
     return 1
   fi
 
@@ -652,18 +700,22 @@ dbox_shell_container() {
   local container_name
   container_name="$(dbox_container_name "$tool" "$profile")"
 
-  # 服务型：在已运行容器中进入 shell
-  if dbox_is_service "$tool"; then
+  dbox_load_config "$tool" || return 1
+
+  if [ "$COMMAND_CONTAINER" = "service" ]; then
     if ! dbox_container_running "$container_name"; then
       dbox_error "服务容器未运行: $container_name"
       dbox_info "请先用以下命令启动:"
-      dbox_info "  d -u ${tool}"
+      if [ "$profile" = "default" ]; then
+        dbox_info "  d -u ${tool}"
+      else
+        dbox_info "  d -u ${tool}-${profile}"
+      fi
       return 1
     fi
 
     docker exec -it "$container_name" /bin/bash
   else
-    # 命令型：启动新容器进入 shell
     dbox_run_container "shell" "$tool" "$profile"
   fi
 }
@@ -705,7 +757,7 @@ dbox_start_service() {
   dbox_load_env "$tool" "$profile" env_vars
 
   local volume_mounts workdir_arg port_mappings
-  dbox_load_mappings "$tool" "$profile" volume_mounts workdir_arg port_mappings || return 1
+  dbox_load_mappings "$tool" "$profile" "service" volume_mounts workdir_arg port_mappings || return 1
 
   local env_mounts
   dbox_load_env_files "$tool" "$profile" env_mounts
@@ -851,10 +903,10 @@ main() {
       dbox_check_tool "$TOOL" || exit 1
 
       # 加载工具配置
-      dbox_load_config "$TOOL"
+      dbox_load_config "$TOOL" || exit 1
 
-      if dbox_is_service "$TOOL"; then
-        # 服务型：在已运行容器中执行
+      if dbox_is_service "$TOOL" && [ "$COMMAND_CONTAINER" = "service" ]; then
+        # command 模式：在已运行服务容器中执行
         dbox_exec_container "$TOOL" "$PROFILE" "${ARGS[@]}"
       else
         # 命令型：判断是否使用 tmux 模式

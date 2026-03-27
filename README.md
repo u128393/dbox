@@ -43,9 +43,16 @@ d claude                 # 运行 claude (默认配置)
 d claude-zai             # 运行 claude (zai 配置)
 d claude --version       # 带参数运行
 d codex                  # 运行 codex (默认配置)
-d -s claude              # 启动 claude 容器 shell
+  d opencode               # 在当前目录运行 opencode
+  d -s claude              # 进入 claude 容器 shell（行为由 COMMAND_CONTAINER 决定）
+d -u opencode            # 启动 opencode serve
 d -u openclaw            # 启动 openclaw 服务（待实现）
 ```
+
+## 设计文档
+
+- `docs/opencode-design.md` - OpenCode 工具的 command/service 混合模式设计方案
+- `opencode/README.md` - OpenCode 工具的使用说明
 
 ## 命令格式
 
@@ -61,7 +68,7 @@ d [flags] [tool[-profile]] [args...]
 | `-d, --down`    | 停止服务（服务型工具）     |
 | `-r, --restart` | 重启服务（服务型工具）     |
 | `-l, --list`    | 列出运行中的服务型工具容器 |
-| `-s, --shell`   | 启动容器 shell             |
+| `-s, --shell`   | 启动容器 shell（由 COMMAND_CONTAINER 决定入口） |
 | `-h, --help`    | 显示帮助                   |
 | `-v, --version` | 显示版本                   |
 
@@ -78,7 +85,7 @@ d claude                    # 运行 claude (默认配置)
 d claude-zai                # 运行 claude (zai 配置)
 d claude --version          # 带参数运行
 d codex                     # 运行 codex (默认配置)
-d -s claude                 # 启动 claude 容器 shell
+  d -s claude                 # 进入 claude 容器 shell（行为由 COMMAND_CONTAINER 决定）
 d -u openclaw               # 启动 openclaw 服务（待实现）
 ```
 
@@ -94,12 +101,12 @@ d -u openclaw               # 启动 openclaw 服务（待实现）
 
 ### 服务型工具
 
-通过 `d -u <tool>` 启动持久化服务容器。容器运行后，可通过 `d <tool> [args...]` 在该容器中执行其他命令。
+通过 `d -u <tool>` 启动持久化服务容器。是否在 `d <tool> [args...]` 时复用该服务容器，由工具自己的 `COMMAND_CONTAINER` 配置决定。
 
 **必需文件：**
 
 - `<tool>/service.sh` - 服务启动脚本
-- `<tool>/tool.sh` - 工具执行脚本（可选，用于在服务容器中执行命令）
+- `<tool>/tool.sh` - 工具执行脚本
 
 **容器特性：**
 
@@ -183,11 +190,26 @@ d claude-<Tab>         # 列出 claude 工具的所有 profile
 ```bash
 # 在 iTerm2 中使用 tmux -CC
 TMUX_IN_ITERM=true
+
+# d <tool> 和 d -s <tool> 时，命令落到新容器还是服务容器
+COMMAND_CONTAINER=new
 ```
+
+`COMMAND_CONTAINER` 可选值：
+
+- `new` - 启动新容器执行
+- `service` - 在已运行的服务容器中执行
+
+该配置同时影响 `d <tool>` 和 `d -s <tool>` 的行为。
+
+默认行为：
+
+- 工具存在 `service.sh` 时默认 `service`
+- 工具不存在 `service.sh` 时默认 `new`
 
 ### Profile 目录结构
 
-每个 profile 从 template 创建：
+每个 profile 优先从 template 创建；如果 template 不存在，则创建空目录：
 
 ```
 profiles/<profile>/
@@ -230,9 +252,13 @@ profiles/<profile>/
 ```
 # 注释以 # 开头
 # 格式：
-#   f:主机路径:容器路径  (文件映射，不存在时创建空文件)
-#   d:主机路径:容器路径  (目录映射，不存在时自动创建目录)
-#   p:主机端口:容器端口  (端口映射，仅服务型工具的 profile 级别)
+#   f:主机路径:容器路径                  (公共文件映射，不存在时创建空文件)
+#   d:主机路径:容器路径                  (公共目录映射，不存在时自动创建目录)
+#   command:f:主机路径:容器路径          (仅 command 模式生效)
+#   command:d:主机路径:容器路径          (仅 command 模式生效)
+#   service:f:主机路径:容器路径          (仅 service 模式生效)
+#   service:d:主机路径:容器路径          (仅 service 模式生效)
+#   service:p:主机端口:容器端口          (仅 service 模式生效)
 
 # 目录映射示例
 d:data/.config:/home/devuser/.config
@@ -245,14 +271,20 @@ f:.claude.json:/home/devuser/.claude.json
 d:.claude:/home/devuser/.claude
 
 # 特殊变量 {cwd} 表示当前工作目录
-d:{cwd}:{cwd}
+command:d:{cwd}:{cwd}
+
+# 仅 service 模式映射你想暴露给服务容器的目录
+service:d:/Users/you/Workspace:/Users/you/Workspace
 
 # 端口映射（仅服务型工具，仅 profile 级别生效）
-# p:8080:8080
-# p:3001:3000
+# service:p:8080:8080
 ```
 
-**注意：** 端口映射 (`p:...`) 仅在服务型工具的 profile 级别 mappings 中生效，在其他级别定义会导致错误。
+**注意：**
+
+- 端口映射 (`p:...`) 仅在 service 模式的 profile 级别 mappings 中生效，在其他级别定义会导致错误
+- 端口映射必须显式写成 `service:p:...`
+- `command:p:...` 非法
 
 ## 添加新工具
 
